@@ -1,0 +1,48 @@
+# =============================================================================
+# .gitignore — Calcul du potentiel halieutique
+# =============================================================================
+
+# --- Données importées par les utilisateurs ---------------------------------
+# Les fichiers Potentiel halieutique et Exploitation contiennent des
+# statistiques de récolte par plan d'eau. Ils sont téléversés dans
+# l'application au moment de l'usage et n'ont pas à être versionnés.
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+
+# --- État de session R -------------------------------------------------------
+# .RData est une image de l'espace de travail : il contient les objets chargés
+# en mémoire, donc potentiellement les données de récolte, sous forme binaire
+# invisible dans un diff. R le recharge automatiquement au démarrage d'une
+# session, ce qui peut aussi masquer les fonctions de l'application.
+.RData
+.Rhistory
+.Rapp.history
+.Rproj.user/
+*.Rproj
+
+# --- Environnements et dépendances locales -----------------------------------
+renv/library/
+renv/staging/
+.Renviron
+rsconnect/
+
+# --- Systèmes d'exploitation -------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Sorties temporaires -----------------------------------------------------
+*.log
+*.tmp
+
+# =============================================================================
+# EXCEPTIONS — à versionner malgré les règles ci-dessus
+# =============================================================================
+# Les rasters climatiques (.tif) ne sont visés par aucune règle : ils sont
+# versionnés, c'est voulu (voir donnees/climat/LISEZMOI.md).
+#
+# Si un fichier .csv de référence devait un jour être versionné, l'exclure de
+# la règle avec une ligne du type :
+#   !donnees/reference/mon_fichier.csv
