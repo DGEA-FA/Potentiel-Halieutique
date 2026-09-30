@@ -1,6 +1,88 @@
 # =============================================================================
 # app_quotas.R
 # Calculateur de quotas de pêche — Touladi / Doré jaune / Omble de fontaine
+#
+# Révision 2026-09-28 (Touladi, modèle de Lester 2021) :
+#   - Linf estimé selon Lester et coll. (2021) : moyenne des 10 % plus grands
+#     poissons >= 300 mm, en LONGUEUR À LA FOURCHE (LF), unité dans laquelle
+#     toutes les constantes du modèle sont calibrées (éq. 1 et 2). Remplace
+#     l'estimateur de Janošík, calculé sur la longueur totale.
+#   - L'INTERFACE reste en LONGUEUR TOTALE (LT) : valeur saisie, valeur
+#     affichée. La conversion LT -> LF se fait dans resolve_linf(), au moment
+#     de passer le Linf au modèle.
+#   - pVeb calculé par l'identité géométrique (éq. 36) au lieu de l'éq. 6b,
+#     comme dans la chaîne de diagnostic SANA (05b).
+#   - Linf observé sur moins de 20 poissons >= 300 mm : signalé fragile.
+#
+# Révision 2026-09-30 (thermocline — Touladi et Doré) :
+#   - Dth observé = BAS DU MÉTALIMNION (z_hypo), inchangé. La profondeur du
+#     gradient maximal (définition de Shuter et coll. 1983) a été testée puis
+#     écartée : sur 646 profils stratifiés de 358 lacs (régions 04 et 08), elle
+#     est 25 à 35 % moins profonde que la formule de Shuter (éq. 33 de Lester),
+#     même en fin d'été, alors que le bas du métalimnion de juillet-août est
+#     au niveau de Shuter (rapport 0,96 à 1,15). Le modèle de Lester ayant été
+#     calibré sur l'échelle de Shuter, c'est le bas du métalimnion qui la
+#     respecte. Le gradient maximal reste calculé et affiché à titre
+#     d'information.
+#   - Nouvelle source « Médiane août-sept. » : médiane du bas du métalimnion
+#     des profils valides d'août-septembre du lac (au moins 2), proposée en
+#     lien sous le champ. Voir MOIS_MEDIANE_DTH.
+#   - Nouvelle source « Formule Lester (éq. 33) » pour la thermocline, en plus
+#     du profil et de la saisie manuelle (même mécanisme que le Linf). Défaut :
+#     profil. Dans ce mode, les modèles reçoivent Dth_obs = NA et appliquent
+#     leur formule interne (Shuter et coll. 1983), comme le script 05b.
+#
+# Révision 2026-09-30 (b) — interface des champs sourcés :
+#   - Sous Long. asymp. et Prof. thermocline : pastilles cliquables
+#     (Spécimens / Lester ; Profil / Médiane / Lester) au lieu d'une ligne de
+#     texte. La source active est colorée ; une option indisponible est grisée,
+#     avec la raison en infobulle ; les alertes passent dans une icône ⚠.
+#   - Le champ affiche TOUJOURS la valeur réellement utilisée par le modèle.
+#     Une valeur calculée par une formule (Lester, repli) apparaît en gris
+#     italique ; elle redevient normale si elle est mesurée ou saisie.
+#   - Dépendance à la T° de l'air rendue visible : la pastille Lester indique
+#     « T° air requise ↓ » et fait défiler jusqu'au champ.
+#
+# Révision 2026-09-29 (relecture avant tests régionaux — corrections mineures,
+# AUCUN calcul modifié) :
+#   - Page Information allégée ; références complètes avec liens (REFERENCES,
+#     plus bas) et lien vers le guide d'utilisation (LIEN_GUIDE_UTILISATEUR).
+#   - Titre du graphique « Rendement observé vs maximum théorique » : le modèle
+#     de référence de l'espèce active, et non « Lester 2021 » pour toutes.
+#   - Tableau des données annuelles : virgule décimale (convention québécoise).
+#   - Libellés : bouton « Mémoriser les valeurs de ce lac », message de
+#     profondeur moyenne manquante, infobulles (fautes et doubles espaces).
+#   - Commentaires périmés corrigés (touladi coché pour l'Omble, figure).
+#
+# Révision 2026-09-29 (b) — corrections approuvées après relecture :
+#   B1  Masses manquantes : NA au lieu de 0 kg ; masse moyenne sur les seuls
+#       poissons pesés dont la masse est connue (exploit_raw()).
+#   B2  T° de l'air pour Lester 2002 (Doré) requise seulement sans thermocline
+#       observée (intrant T_air_repli) ; sans les deux, modèle indisponible.
+#   B3  Inventaire par défaut : profil valide le plus récent de juin à septembre
+#       (MOIS_ESTIVAUX) ; profils hors saison signalés dans la liste et sous
+#       la thermocline et l'O2.
+#   B4  Valin (Doré) : repli de 0,60 kg/ha rétabli, seulement si conductivité ET
+#       profondeur moyenne manquent (lacs >= 20 ha).
+#   B5  Omble : calcul bloqué sans espèce cochée (message sous la liste).
+#   B6  Export : modèle de référence, rendement max., quota recommandé, taux.
+#   B7  Graphique rendement observé : pas de maximum si les lacs diffèrent.
+#   B8  Vézina et Valin-Vaillancourt : prof. max non exigée (intrant Dmn_seule).
+#   B9  Graphique de masse : moyenne sur la fenêtre choisie (5/10/20 ans, tout).
+#   B10 Champ « Périmètre » retiré (n'entrait dans aucun calcul).
+#   B11 Masse estimée sur moins de 5 poissons pesés : orange italique (tableau).
+#   B12 Réduction « chalets » plafonnée à 100 %.
+#   B13 Avertissements : O2 > 20 mg/L, conductivité hors 5-500 µS/cm, pesés >
+#       capturés, Lester 2021 hors de la plage publiée (0,07-2,22 kg/ha).
+#   B14 Taux révisé ramené dans 1-200 % : valeur réaffichée dans le champ.
+#   B15 Code espèce du fichier d'exploitation nettoyé (espaces, majuscules).
+#   B16 Code mort retiré (ZONES, zone_taux, warnings_actifs_rv, overlay_models).
+#   Interface : tableau « En attente des données du lac » à l'ouverture, second
+#   bouton Calculer sous le panneau gauche, couleurs de l'espèce dans les
+#   graphiques (succès en sarcelle pour l'Omble), boutons « Masquer » uniformisés, libellés (Lac, Quota actuel et
+#   données d'exploitation, Achigan), années de la fenêtre affichées, axe des
+#   années automatique, avertissement avant de quitter avec des quotas non
+#   exportés, notes « Indisponible — motif » pour les modèles sans valeur.
 # =============================================================================
 
 library(shiny)
@@ -29,50 +111,34 @@ COULEURS <- list(
     accent     = "#4A6FA5",
     tab_actif  = "#74B9E8",
     bar        = "#243342",   # bande espèces (sombre)
-    tint        = "#EBF2FA"   # fond clair des cartes accentuées
+    tint        = "#EBF2FA",  # fond clair des cartes accentuées
+    serie2      = "#E74C3C"   # 2e série des graphiques (succès) — rouge sur bleu
   ),
   dore = list(
     primaire   = "#B07D1A",
     accent     = "#E6A817",
     tab_actif  = "#F6C84B",
     bar        = "#5C4108",
-    tint        = "#FBF3DF"
+    tint        = "#FBF3DF",
+    serie2      = "#E74C3C"   # rouge : bon contraste avec l'or des barres
   ),
   omble = list(
     primaire   = "#8B2252",
     accent     = "#B83D74",
     tab_actif  = "#E07FAD",
     bar        = "#5A1636",
-    tint        = "#F7E6EE"
+    tint        = "#F7E6EE",
+    # Sarcelle foncé (2026-09-29) : le rouge se confondait avec le rose des
+    # barres ; teinte opposée au rose, distincte aussi pour les daltoniens
+    serie2      = "#1B7F79"
   )
 )
 
 ESPECE_ACTIVE <- "touladi"
 COL <- COULEURS[[ESPECE_ACTIVE]]
 
-# Couleurs des trois zones de la fourchette
-# (source unique : figure, légende, cartes KPI, badges d'état)
-ZONES <- list(
-  conservateur = list(fill = "#D3D1C7", trait = "#8A8F94", nom = "Conservateur"),
-  recommande   = list(fill = "#C0DD97", trait = "#3B6D11", nom = "Recommandé"),
-  eleve        = list(fill = "#FAC775", trait = "#B97A0B", nom = "Élevé"),
-  # Au-delà du maximum théorique (> 100 %) : récolte supérieure au rendement
-  # maximal soutenu estimé — seul seuil au sens biologique (révision 2026-09)
-  depasse      = list(fill = "#FCEBEB", trait = "#A32D2D", nom = "Au-delà du maximum")
-)
-
-#' Zone d'un taux (% du maximum théorique) — source unique des couleurs.
-#' Seuils (révision 2026-09) : la méthode recommande UNE valeur (80 %) ;
-#' l'ancienne borne de 90 % (non sourcée) est abandonnée.
-#'   = 80 % : recommandé (vert) ; < 80 % : conservateur (gris) ;
-#'   80-100 % : au-dessus du recommandé (orange) ; > 100 % : au-delà du maximum (rouge)
-zone_taux <- function(pct) {
-  if (is.na(pct)) return(ZONES$conservateur)
-  if (abs(pct - PCT_RECOMMANDE) < 0.5) ZONES$recommande
-  else if (pct < PCT_RECOMMANDE) ZONES$conservateur
-  else if (pct <= 100) ZONES$eleve
-  else ZONES$depasse
-}
+# (Palette ZONES et fonction zone_taux() retirées le 2026-09-29 : plus
+#  utilisées depuis l'abandon de la fourchette colorée.)
 
 # Seuil du rendement recommandé : 80 % du maximum théorique (pretty good yield, Hilborn 2010)
 PCT_RECOMMANDE <- 80L
@@ -82,14 +148,28 @@ PCT_RECOMMANDE <- 80L
 # FONCTIONS UTILITAIRES
 # =============================================================================
 
-#' Résoudre Linf : valeur observée ou formule théorique Lester éq. 1
-#' @param Linf_obs  Linf mesuré (mm) — NA si absent
-#' @param A         Superficie (ha)
-resolve_linf <- function(Linf_obs, A) {
-  if (is.na(Linf_obs) || Linf_obs <= 0)
-    return(list(value  = 957 * (1 - exp(-0.14 * (1 + log(A)))),
-                source = "théorique"))
-  list(value = Linf_obs, source = "observé")
+#' Conversion longueur totale <-> longueur à la fourche (Touladi)
+#' LF = -6,096 + 0,92176 × LT : régression du script 04 v3 sur 4 995 touladis
+#' mesurés des deux façons dans 63 lacs SANA (R² = 0,995 ; écart-type résiduel
+#' 9 mm ; LT de 118 à 983 mm). À mettre à jour si le 04 est réestimé.
+CONV_LF_A <- -6.096
+CONV_LF_B <- 0.92176
+lt_vers_lf <- function(lt) CONV_LF_A + CONV_LF_B * lt
+lf_vers_lt <- function(lf) (lf - CONV_LF_A) / CONV_LF_B
+
+#' Résoudre Linf pour le modèle de Lester.
+#' L'interface travaille en LONGUEUR TOTALE ; le modèle est calibré en
+#' LONGUEUR À LA FOURCHE. La conversion se fait ici, et seulement ici.
+#' @param Linf_lt  Linf (mm, longueur totale) saisi ou calculé — NA si absent
+#' @param A        Superficie (ha)
+#' @return list(value = Linf en LF pour le modèle,
+#'              value_lt = Linf en LT pour l'affichage, source)
+resolve_linf <- function(Linf_lt, A) {
+  if (is.na(Linf_lt) || Linf_lt <= 0) {
+    lf <- 957 * (1 - exp(-0.14 * (1 + log(A))))   # Lester éq. 1, en LF
+    return(list(value = lf, value_lt = lf_vers_lt(lf), source = "théorique"))
+  }
+  list(value = lt_vers_lf(Linf_lt), value_lt = Linf_lt, source = "observé")
 }
 
 #' Conductivité (µS/cm) → TDS (mg/L)
@@ -285,6 +365,56 @@ extraire_climat <- function(lat, lon, catalogue, variable, n_annees) {
 # Laissée vide (""), aucun lien ne s'affiche dans le tableau des modèles.
 LIEN_LESTER_SAVI <- ""
 
+# Lien vers le guide d'utilisation (Word ou PDF déposé sur l'intranet ou
+# SharePoint). Laissé vide (""), la page Information n'affiche pas de lien.
+LIEN_GUIDE_UTILISATEUR <- ""
+
+# Références affichées dans la page Information (révision 2026-09-29).
+# url = "" : aucun lien affiché (documents internes — ajouter le lien intranet
+# quand il existe). Les liens publics ont été vérifiés le 2026-09-29 ; le DOI de
+# Lester et coll. (2021) est celui imprimé dans le chapitre.
+REFERENCES <- list(
+  list(texte = paste0("Lester, N.P., B.J. Shuter, M.L. Jones et S. Sandstrom (2021). A general, ",
+                      "life history-based model for sustainable exploitation of lake charr across ",
+                      "their range. Dans : The Lake Charr Salvelinus namaycush, Springer, p. 429-485."),
+       url = "https://doi.org/10.1007/978-3-030-62259-6_12"),
+  list(texte = paste0("Shuter, B.J., M.L. Jones, R.M. Korver et N.P. Lester (1998). A general, life ",
+                      "history based model for regional management of fish stocks: the inland lake ",
+                      "trout (Salvelinus namaycush) fisheries of Ontario. Can. J. Fish. Aquat. Sci. ",
+                      "55 : 2161-2177."),
+       url = "https://cdnsciencepub.com/doi/10.1139/f98-055"),
+  list(texte = paste0("Lester, N.P. et coll. (2002). The effect of water clarity on walleye habitat ",
+                      "and yield. Percid Community Synthesis, OMNR (rapport)."),
+       url = ""),
+  list(texte = paste0("Ryder, R.A. (1965). A method for estimating the potential fish production of ",
+                      "north-temperate lakes. Trans. Am. Fish. Soc. 94 : 214-218."),
+       url = "https://fisheries.org/2015/07/fisheries-classics-ryders-morphoedaphic-index/"),
+  list(texte = paste0("OMNR (1982). Partitioning yields estimated from the morphoedaphic index into ",
+                      "individual species yields. Rapport du SPOF, groupe de travail no 12."),
+       url = ""),
+  list(texte = paste0("Loranger et coll. (1986). Applicabilité de l'indice morphoédaphique ",
+                      "pour prédire le rendement de la pêche sportive dans les lacs du territoire à ",
+                      "accès contrôlé du Québec."),
+       url = ""),
+  list(texte = paste0("Valin (1998) et Vaillancourt (1998). Méthode d'évaluation du rendement des ",
+                      "lacs de pêche sportive, Saguenay–Lac-Saint-Jean (omble de fontaine, doré ",
+                      "jaune, touladi)."),
+       url = ""),
+  list(texte = paste0("Vaillancourt, P.G. et J. Boivin (2000). Méthodes utilisées pour déterminer ",
+                      "les quotas de départ des lacs à omble de fontaine, Saguenay–Lac-Saint-Jean."),
+       url = ""),
+  list(texte = paste0("Archambault, J. (1988, 2009), d'après Houde (1982). Table de rendement de ",
+                      "l'omble de fontaine selon la superficie et la compétition."),
+       url = ""),
+  list(texte = "Vézina, R. (1978). Rendement de l'omble de fontaine selon la profondeur moyenne.",
+       url = ""),
+  list(texte = paste0("Grilles régionales : DGFa10 (Nord-du-Québec, réserve AMW), DGFa15 ",
+                      "(Laurentides) et documents régionaux de la Mauricie."),
+       url = ""),
+  list(texte = "Hilborn, R. (2010). Pretty Good Yield and exploited fishes. Marine Policy 34 : 193-196.",
+       url = "https://ideas.repec.org/a/eee/marpol/v34y2010i1p193-196.html")
+)
+
 #' Premier modèle applicable de la cascade de référence de l'espèce active.
 #'
 #' Le nom affiché est lu DANS LE REGISTRE (config_especes.R) plutôt que dans une
@@ -338,49 +468,88 @@ fmt_int <- function(x) {
 #' client : is.na(NULL) renvoie logical(0), ce qui fait planter un if().
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
-# Rapport Lmax/Linf — Ricker 1975 (Lmax ≈ 0,95 × Linf pour les salmonidés)
-LMAX_LINF_RATIO <- 0.95
+# Linf selon Lester et coll. (2021, p. 440), en LONGUEUR À LA FOURCHE :
+# moyenne des 10 % plus grands poissons de 300 mm LF et plus. Le seuil de
+# 300 mm écarte les juvéniles ; la moyenne du décile supérieur est moins
+# sensible qu'un ajustement de von Bertalanffy à la troncature des grandes
+# tailles par la pêche. Mêmes paramètres que le script 04 v3.2.
+LINF_LF_MIN   <- 300   # mm LF
+LINF_PROP_SUP <- 0.10  # fraction supérieure moyennée
+LINF_N_MIN    <- 5     # en deçà : formule théorique (éq. 1)
+LINF_N_FIABLE <- 20    # en deçà : Linf observé signalé fragile (2 poissons ou moins au sommet)
 
-#' Linf (Janošík) : longueur asymptotique estimée à partir de spécimens mesurés.
-#'
-#' Coupe les 5 % supérieurs par RANG (pas par valeur < q95) pour éviter
-#' d'éliminer une grappe d'ex aequo au sommet, ce qui sous-estimerait Linf.
-#'
-#' @param lt_vec  Vecteur de longueurs totales (mm), NA exclus en amont
-#' @return        Linf (mm) ou NA_real_ si trop peu de spécimens
-calc_linf_janoscik <- function(lt_vec) {
-  lt_vec <- lt_vec[!is.na(lt_vec) & lt_vec > 0]
-  n      <- length(lt_vec)
-  if (n < 10L) return(NA_real_)
+# Mois de la saison estivale pour le choix du profil par défaut (thermocline,
+# O2) — décision 2026-09-29 : juin à septembre (B3)
+MOIS_ESTIVAUX <- 6:9
 
-  # Coupe par rang : retire les ceil(5 % × n) plus grands individus
-  n_cut  <- max(1L, ceiling(n * 0.05))
-  lt_sub <- sort(lt_vec, decreasing = TRUE)[-seq_len(n_cut)]
-  if (length(lt_sub) < 5L) return(NA_real_)
+# Médiane des thermoclines de fin d'été (révision 2026-09-30) : bas du
+# métalimnion des profils valides d'août-septembre, dès 2 profils. Validation
+# croisée sur 204 lacs SANA : la médiane de plusieurs profils prédit un profil
+# retiré avec une erreur typique de 19 %, contre 22 % pour le profil le plus
+# récent et 24 % pour la formule ; en août-septembre, les profils sont moins
+# bruités et centrés sur la formule (rapport moyen 0,98).
+MOIS_MEDIANE_DTH   <- 8:9
+N_MIN_MEDIANE_DTH  <- 2
 
-  lmax <- mean(head(sort(lt_sub, decreasing = TRUE), 5L))
-  lmax / LMAX_LINF_RATIO   # Lmax ≈ LMAX_LINF_RATIO × Linf
+# Seuils des avertissements (B11, B13 — décision 2026-09-29). Ils ne bloquent
+# aucun calcul : ils signalent une valeur à vérifier.
+SEUIL_N_PESES      <- 5           # moins de 5 poissons pesés : masse fragile
+SEUIL_O2_MAX       <- 20          # mg/L ; au-delà, sans doute un % de saturation
+SEUIL_COND         <- c(5, 500)   # µS/cm ; plage plausible des lacs du Québec
+PLAGE_LESTER_2021  <- c(0.07, 2.22) # kg/ha/an ; tableau 3 de Lester et coll. (2021)
+
+#' @param lf_vec  Longueurs à la fourche (mm) : mesurées, ou converties de la LT
+#' @return        list(value = Linf en mm LF ou NA, n = poissons >= 300 mm LF)
+calc_linf_lester <- function(lf_vec) {
+  lf_vec <- lf_vec[!is.na(lf_vec) & lf_vec >= LINF_LF_MIN]
+  n      <- length(lf_vec)
+  if (n < LINF_N_MIN) return(list(value = NA_real_, n = n))
+  k <- ceiling(LINF_PROP_SUP * n)
+  list(value = mean(sort(lf_vec, decreasing = TRUE)[seq_len(k)]), n = n)
 }
 
 
-#' Détection de thermocline — méthode normalisée MELCCFP (gradient -ΔT/Δz ≥ 1 °C/m).
+#' Détection de thermocline sur un profil de température.
+#'
+#' DÉFINITION RETENUE POUR LES MODÈLES (révision 2026-09-30) : BAS DU
+#' MÉTALIMNION (z_hypo, début de l'hypolimnion).
+#'
+#' Pourquoi pas le gradient maximal, pourtant la définition de Shuter et coll.
+#' (1983) ? Les modèles de Lester (2021, éq. 33 ; 2002, éq. A9) sont calibrés
+#' sur l'ÉCHELLE de la formule de Shuter, qui représente une moyenne sur toute
+#' la saison stratifiée. Sur nos profils ponctuels (646 profils stratifiés,
+#' régions 04 et 08), le gradient maximal est 25 à 35 % moins profond que
+#' Shuter, même en fin d'été ; le bas du métalimnion de juillet-août est au
+#' niveau de Shuter (rapport 0,96 à 1,15). Choix EMPIRIQUE, fondé sur
+#' l'équivalence d'échelle, et non sur la définition. Un Dth trop peu profond
+#' réduit B_rms et le rendement (environ x 0,6 en médiane sur 40 lacs SANA).
 #'
 #' Pipeline :
 #'   1. Agrégation : température moyenne par profondeur
-#'   2. Interpolation linéaire à pas ~1 m (précision de borne, robustesse du seuil)
-#'   3. Gradient sur la grille interpolée
-#'   4. Bloc contigu contenant le gradient maximal → z_hypo = bas de ce bloc
-#'      (protège contre un segment raide parasite près du fond)
+#'   2. Interpolation linéaire à pas de 1 m
+#'   3. Gradient -ΔT/Δz de chaque segment de 1 m (°C/m, positif si T baisse)
+#'   4. Segment de gradient maximal (« anchor ») : le mètre où la température
+#'      chute le plus vite. z_grad_max = MILIEU de ce segment (information
+#'      seulement). En cas d'égalité, le segment le moins profond est retenu.
+#'   5. Métalimnion : bloc contigu de segments à gradient >= seuil (1 °C/m,
+#'      norme MELCCFP) contenant le segment maximal (protège contre un segment
+#'      raide parasite près du fond). z_thermo_top / z_thermo_bot = ses bornes.
+#'      z_hypo = z_thermo_bot = VALEUR PASSÉE AUX MODÈLES. Précision : 1 m.
+#'
+#' Le profil n'est déclaré stratifié que si au moins un segment atteint le
+#' seuil : sans métalimnion, le gradient maximal n'a pas de sens physique.
 #'
 #' @param profil      data.frame avec colonnes `prof_mes` et `temp`
-#' @param seuil_grad  Gradient minimal (°C/m) pour définir la thermocline (défaut 1)
-#' @return            data.frame(z_thermo_top, z_thermo_bot, z_hypo, epaisseur,
-#'                               statut, raison) — colonnes NA si non stratifié
+#' @param seuil_grad  Gradient minimal (°C/m) pour définir le métalimnion (défaut 1)
+#' @return            data.frame(z_grad_max, grad_max, z_thermo_top, z_thermo_bot,
+#'                               z_hypo, epaisseur, statut, raison)
+#'                    — colonnes NA si non stratifié
 detect_thermocline_norm <- function(profil, seuil_grad = 1) {
 
   # Structure de sortie vide
   vide <- function(raison) {
-    data.frame(z_thermo_top = NA_real_, z_thermo_bot = NA_real_,
+    data.frame(z_grad_max = NA_real_, grad_max = NA_real_,
+               z_thermo_top = NA_real_, z_thermo_bot = NA_real_,
                z_hypo = NA_real_, epaisseur = NA_real_,
                statut = "non_stratifie", raison = raison,
                stringsAsFactors = FALSE)
@@ -413,9 +582,15 @@ detect_thermocline_norm <- function(profil, seuil_grad = 1) {
   idx_thermo <- which(ok & grad >= seuil_grad)
   if (length(idx_thermo) == 0L) return(vide("aucun segment ≥ seuil (profil non stratifié)"))
 
-  # 4. Bloc contigu contenant le gradient maximal
-  idx_max  <- which.max(grad[idx_thermo])
-  anchor   <- idx_thermo[idx_max]             # segment avec le gradient max
+  # 4. Segment de gradient maximal : le mètre où T chute le plus vite.
+  #    which.max() retourne le premier maximum : en cas d'égalité, le segment
+  #    le moins profond. Le segment k va de z_grid[k] à z_grid[k + 1].
+  idx_max    <- which.max(grad[idx_thermo])
+  anchor     <- idx_thermo[idx_max]
+  z_grad_max <- (z_grid[anchor] + z_grid[anchor + 1L]) / 2   # milieu du segment
+  grad_max   <- grad[anchor]
+
+  # 5. Métalimnion (information) : bloc contigu autour du segment maximal
 
   # Étendre vers le haut et le bas tant que grad ≥ seuil et contigu
   sup_idx  <- anchor
@@ -427,9 +602,11 @@ detect_thermocline_norm <- function(profil, seuil_grad = 1) {
   z_thermo_bot <- z_grid[inf_idx + 1L]       # bas du dernier segment
 
   data.frame(
+    z_grad_max   = z_grad_max,                # information (définition de Shuter)
+    grad_max     = grad_max,                  # °C/m
     z_thermo_top = z_thermo_top,
     z_thermo_bot = z_thermo_bot,
-    z_hypo       = z_thermo_bot,              # Dth = bas de la thermocline (début hypolimnion)
+    z_hypo       = z_thermo_bot,              # Dth passé aux modèles (début de l'hypolimnion)
     epaisseur    = z_thermo_bot - z_thermo_top,
     statut       = "stratifie",
     raison       = "",
@@ -667,7 +844,8 @@ PATRONS_SPECIMENS <- list(
   annee       = "ann",
   station     = "no.*station",
   espece_code = "esp.*code|code.*esp",
-  long_totale = "long.*totale|total.*max"
+  long_totale = "long.*totale|total.*max",
+  long_fourche = "fourche"
 )
 
 #' Remplacer les marqueurs de valeurs manquantes par NA (colonnes texte)
@@ -967,12 +1145,17 @@ calc_lester_touladi <- function(A, Dmax, Dmn, T_air, Linf, Dth_obs = NA) {
     Dth        <- 3.26 * (A^0.109) * (Dmn^0.213) * exp(-0.0263 * T_air)
     Dth_source <- "théorique (Shuter)"
   }
-  term_geo  <- max(0.00001, 1 - (Dth / Dmax))
-  pVhy      <- term_geo^DR
-  pVeb      <- exp(-4.63 * pVhy)
+  term_geo  <- max(1e-9, 1 - (Dth / Dmax))
+  pVhy      <- term_geo^DR          # volume sous la thermocline (éq. 35)
+  pAhy      <- term_geo^(DR - 1)    # superficie sous la thermocline (éq. 34)
+  # Volume épibenthique par identité géométrique (éq. 36) : c'est la version
+  # qui reproduit le tableau 3 de Lester et sous-tend le coefficient 8,47.
+  # L'éq. 6b (exp(-4,63 × pVhy)) était une approximation empirique.
+  pVeb      <- min(1, max(0, 1 - pVhy - pAhy * DR * (Dth / Dmax)))
   S_habitat <- 1 / (1 + exp(2.47 + 0.386 * T_air - 16.8 * pVhy))
 
   # --- 2. Biologie -----------------------------------------------------------
+  # Linf en mm de LONGUEUR À LA FOURCHE (voir resolve_linf) ; W∞ en kg.
   Winf <- (Linf / 451)^3.2          # poids asymptotique (kg)
 
   # --- 3. Biomasse cible au RMS (Bmsy) --------------------------------------
@@ -996,6 +1179,7 @@ calc_lester_touladi <- function(A, Dmax, Dmn, T_air, Linf, Dth_obs = NA) {
     Dth          = Dth,
     Dth_source   = Dth_source,
     pVhy         = pVhy,
+    pAhy         = pAhy,
     pVeb         = pVeb,
     S_habitat    = S_habitat,
     Winf         = Winf,
@@ -1113,8 +1297,13 @@ calc_ime_ryder <- function(TDS, Dmn, partition = 0.25) {
 # @param G        Degrés-jours (base 5 °C) / 1000
 # @param z_sec    Profondeur de Secchi (m)
 # @param Dth_obs  Profondeur de thermocline observée (m) — NA → repli théorique / non stratifié
-# @param T_air    Température moyenne de l'air (°C) — utilisée seulement pour le repli théorique (éq. A9)
-calc_lester_dore <- function(A, Dmax, Dmn, TDS, G, z_sec, Dth_obs = NA, T_air = NA) {
+# @param T_air_repli Température moyenne de l'air (°C) — utilisée seulement pour le
+#   repli théorique de la thermocline (éq. A9). Intrant distinct de « T_air »
+#   (B2, 2026-09-29) : intrant_valide() ne l'exige que faute de thermocline
+#   observée. Avant, l'intrant « T_air » rendait le modèle indisponible sans
+#   T° de l'air, même avec une thermocline observée.
+calc_lester_dore <- function(A, Dmax, Dmn, TDS, G, z_sec, Dth_obs = NA, T_air_repli = NA) {
+  T_air <- T_air_repli
 
   # Garde : morphométrie et intrants de base — jamais fabriqués, modèle
   # simplement inapplicable si l'un d'eux est absent ou incohérent.
@@ -1190,30 +1379,50 @@ calc_lester_dore <- function(A, Dmax, Dmn, TDS, G, z_sec, Dth_obs = NA, T_air = 
 # Aucune réduction physico-chimique ou par espèces présentes (celles-ci sont
 #   propres à l'Omble de fontaine dans le document source).
 #
-# Repli explicite (jamais silencieux) : si la conductivité ou la profondeur
+# Repli explicite (jamais silencieux) : si la conductivité ET la profondeur
 #   moyenne manquent, rendement de base = 0,60 kg/ha, applicable uniquement
-#   aux lacs ≥ 20 ha (au-delà, le modèle est simplement indisponible).
+#   aux lacs ≥ 20 ha (sinon, le modèle est simplement indisponible).
 #
-# @param TDS  Solides dissous totaux (mg/L)
-# @param Dmn  Profondeur moyenne (m)
-# @param A    Superficie (ha) — utilisée seulement pour le repli (seuil 20 ha)
-calc_valin_dore <- function(TDS, Dmn, A) {
+# @param TDS_optionnel  Solides dissous totaux (mg/L), NA si inconnus
+# @param Dmn_optionnel  Profondeur moyenne (m), NA si inconnue
+# @param A_optionnel    Superficie (ha) — utilisée seulement pour le repli (seuil 20 ha)
+# @param Dmax_optionnel Profondeur maximale (m) — contrôle de cohérence seulement
+calc_valin_dore <- function(TDS_optionnel, Dmn_optionnel, A_optionnel, Dmax_optionnel = NA) {
+  # Intrants « _optionnel » (B4, 2026-09-29) : avec des intrants bloquants
+  # (TDS, Dmn, A), le modèle était déclaré indisponible dès qu'une donnée
+  # manquait, et le repli documenté de 0,60 kg/ha ne s'exécutait jamais.
+  TDS <- TDS_optionnel; Dmn <- Dmn_optionnel; A <- A_optionnel
+  tds_ok <- !is.na(TDS) && TDS > 0
+  dmn_ok <- !is.na(Dmn) && Dmn > 0
 
-  donnees_ok <- !is.na(TDS) && TDS > 0 && !is.na(Dmn) && Dmn > 0
+  # Profondeur moyenne incohérente : rejetée, jamais traitée comme « inconnue »
+  if (dmn_ok && !is.na(Dmax_optionnel) && Dmn >= Dmax_optionnel)
+    return(list(rendement_ha = NA_real_, IME = NA_real_,
+                note = "Prof. moyenne ≥ prof. max — donnée à corriger, modèle indisponible."))
 
-  if (!donnees_ok) {
-    if (is.na(A) || A < 20) return(NULL)   # repli non applicable sous 20 ha
+  if (tds_ok && dmn_ok) {
+    IME <- TDS / Dmn
+    MSY <- 0.66 * IME^0.466 * 0.32
+    return(list(rendement_ha = MSY, IME = round(IME, 3), note = ""))
+  }
+
+  # Repli : le document (Valin et Vaillancourt, p. 4) le prévoit « en absence
+  # de donnée sur la conductivité ET la profondeur moyenne », pour les lacs de
+  # 20 ha et plus seulement (décision 2026-09-29 : les deux doivent manquer).
+  if (!tds_ok && !dmn_ok) {
+    if (is.na(A) || A < 20)
+      return(list(rendement_ha = NA_real_, IME = NA_real_,
+                  note = "Conductivité et prof. moyenne manquantes — repli de 0,60 kg/ha réservé aux lacs de 20 ha et plus."))
     return(list(
       rendement_ha = 0.60,
       IME          = NA_real_,
-      note         = "Valeur de base (repli) — donnée insuffisante (conductivité ou profondeur moyenne manquante)."
+      note         = "Valeur de base (repli) — conductivité et profondeur moyenne manquantes."
     ))
   }
 
-  IME <- TDS / Dmn
-  MSY <- 0.66 * IME^0.466 * 0.32
-
-  list(rendement_ha = MSY, IME = round(IME, 3), note = "")
+  list(rendement_ha = NA_real_, IME = NA_real_,
+       note = paste0(if (!tds_ok) "Conductivité manquante" else "Prof. moyenne manquante",
+                     " — le repli de 0,60 kg/ha ne s'applique que si les deux manquent."))
 }
 
 
@@ -1286,8 +1495,11 @@ TABLE_ARCHAMBAULT_SAFO <- data.frame(
 # Non valide sous ~2 m de profondeur moyenne (table source marque "NON
 # VALABLE" a 1 m).
 #
-# @param Dmn Profondeur moyenne (m)
-calc_vezina_omble <- function(Dmn) {
+# @param Dmn_seule Profondeur moyenne (m). Nom d'intrant « Dmn_seule » (B8,
+#   2026-09-29) : contrairement à « Dmn », il n'exige pas la profondeur maximale,
+#   que la formule n'utilise pas (voir intrant_valide()).
+calc_vezina_omble <- function(Dmn_seule) {
+  Dmn <- Dmn_seule
   if (is.na(Dmn) || Dmn < 2) return(NULL)
 
   Dmn_pi <- Dmn * 3.2808
@@ -1437,9 +1649,9 @@ calc_archambault_omble <- function(A, grp) {
 # (methode Valin 1998, table p.1). Priorite descendante : le premier cas
 # applicable (le plus severe) l'emporte -- reproduit l'ordre du document.
 #
-# NOTE : les lignes impliquant "touladi" (75 %/90 %) ne peuvent jamais se
-# declencher -- "touladi" n'est pas une case a cocher du formulaire Omble
-# actuel (voir especes_groupes_omble()).
+# NOTE (mise a jour 2026-09-29) : les lignes impliquant "touladi" (75 %/90 %)
+# se declenchent maintenant -- touladi, moulac/lacmou et truites sont des cases
+# du formulaire Omble (groupe touladi_equiv, voir especes_groupes_omble()).
 #
 # Retourne NA si des especes sont presentes mais qu'aucune combinaison
 # documentee ne s'applique (ex. dore seul, sans menes/catostomes) --
@@ -1545,9 +1757,10 @@ calc_pct_reduction_valin <- function(grp) {
 #   alors simplement ignoree.
 # @param pct_menes_catostomes % du palier "menes et/ou catostomes seuls"
 #   (plage documentee 50-70, defaut 60 -- non sourcee)
-calc_valin_vaillancourt_omble <- function(Dmn, grp, pH = NA, o2_pct_reduction = NA,
+calc_valin_vaillancourt_omble <- function(Dmn_seule, grp, pH = NA, o2_pct_reduction = NA,
                                           tributaire_absent = NA, nb_chalets = NA,
                                           A_optionnel = NA, pct_menes_catostomes = 60) {
+  Dmn <- Dmn_seule   # B8 : voir calc_vezina_omble()
 
   if (is.na(Dmn) || Dmn < 2.0 || Dmn > 25.9) {
     return(list(rendement_ha = NA_real_,
@@ -1600,7 +1813,8 @@ calc_valin_vaillancourt_omble <- function(Dmn, grp, pH = NA, o2_pct_reduction = 
   }
 
   if (!is.na(nb_chalets) && !is.na(A_optionnel) && A_optionnel > 0 && nb_chalets > 0) {
-    pct_chalets <- nb_chalets / (A_optionnel / 10)
+    # Plafonné à 100 % (B12, 2026-09-29) : au-delà, le rendement deviendrait négatif
+    pct_chalets <- min(nb_chalets / (A_optionnel / 10), 100)
     rendement <- rendement * (1 - pct_chalets / 100)
     notes <- c(notes, paste0("chalets −", round(pct_chalets, 1), " %"))
   }
@@ -2330,6 +2544,22 @@ css_minimal <- "
   .src-ligne a { color: inherit; text-decoration: underline dotted; cursor: pointer; }
   .src-ligne a:hover { color: #2C3E50; }
   .msg-var { font-size: 12px; line-height: 1.35; margin-top: 3px; }
+  /* Pastilles de choix de source (2026-09-30) */
+  .src-pastilles { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+  .src-pastilles .src-texte { font-size: 12px; color: #5f6b77; margin-right: 2px; }
+  .pastille { font-size: 11.5px; line-height: 1.5; padding: 0 8px; border-radius: 10px;
+              border: 1px solid #c5ced8; color: #4a5663; background: #fff;
+              text-decoration: none !important; cursor: pointer; white-space: nowrap; }
+  a.pastille:hover { border-color: #2C3E50; color: #2C3E50; }
+  .pastille.active { background: var(--bs-primary, #2C3E50); border-color: var(--bs-primary, #2C3E50);
+                     color: #fff; cursor: default; }
+  .pastille.inactive { color: #a7b0b9; border-style: dashed; cursor: help; }
+  .pastille-alerte { color: #A86E08; cursor: help; font-size: 13px; margin-left: 2px; }
+  /* Valeur calculée par une formule (et non mesurée ni saisie) */
+  .champ-calcule .form-control { color: #7a8591 !important; font-style: italic; }
+  /* Mise en évidence d'un champ atteint par un lien « ↓ » */
+  @keyframes flash-champ { 0% { box-shadow: 0 0 0 3px #f0ad4e; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  .flash-champ { animation: flash-champ 1.8s ease-out; }
   .msg-danger  { color: #B0453C; }
   .msg-warning { color: #A86E08; }
   .msg-info    { color: #5a6b7b; }
@@ -2414,7 +2644,14 @@ css_minimal <- "
   .intrants-liste { line-height: 1.55; }
   .intrants-sep   { color: #adb5bd; }
   .intrants-theo  { color: #A86E08; font-weight: 600; }
-  /* Page Information (brouillon) */
+  /* Boutons « Masquer » : lien texte, sans la pastille grise que le thème
+     donne aux actionButton (2026-09-29) */
+  .btn.lien-masquer, .btn.lien-masquer:hover, .btn.lien-masquer:focus {
+    background: transparent !important; border: none !important; box-shadow: none !important;
+    color: #6c757d !important; }
+  /* Second bouton Calculer, sous le panneau de gauche (2026-09-29) */
+  .calc-bas { margin-top: 12px; }
+  /* Page Information */
   .info-page { max-width: 900px; }
   .info-page h5 { font-size: 16px; font-weight: 600; color: #2C3E50; }
   .info-page h6 { font-size: 14px; font-weight: 600; color: #3d4b59; }
@@ -2541,15 +2778,24 @@ bloc_donnees_lac_ui <- function() {
       # case de gauche, à côté de la thermocline qu'il pilote.
       uiOutput("ifa_inv_ui"),
       case_espece(c("touladi", "dore"),
-        champ_num("therm_manual", "Prof. thermocline (m)", min = 0, src = TRUE)),
+        champ_num("therm_manual",
+                  info_tip("Prof. thermocline (m)",
+                           paste0("Profil : bas du métalimnion (début de l'hypolimnion). ",
+                                  "La thermocline s'approfondit au cours de l'été : privilégier ",
+                                  "la fin de l'été. Pastilles sous le champ : Profil (inventaire ",
+                                  "choisi), Médiane des profils d'août-septembre (dès 2 profils, ",
+                                  "plus fiable qu'un profil unique) ou formule de Lester. Une ",
+                                  "valeur en gris italique vient d'une formule. \u26a0 : écart de ",
+                                  "plus de 25 % avec la formule (détail au survol).")),
+                  min = 0, src = TRUE)),
       case_espece(c("touladi", "dore"),
         champ_num("conductivite", "Conductivité (µS/cm)", min = 0, msg = "conductivite")),
       case_espece("touladi",
-        champ_num("linf_manual", "Long. asymp. (mm)", min = 0, src = TRUE)),
+        champ_num("linf_manual", "Long. asymp. LT (mm)", min = 0, src = TRUE)),
       case_espece("dore",
         champ_num("secchi", "Secchi (m)", min = 0, msg = "secchi")),
-      case_espece("omble",
-        champ_num("perimetre", "Périmètre (km)", min = 0)),
+      # Champ « Périmètre (km) » retiré (B10, 2026-09-29) : il n'entrait dans
+      # aucun modèle. La colonne reste lue dans l'onglet Lacs (sans effet).
       case_espece("omble",
         champ_num("ph_eau", "pH", min = 0, max = 14, step = 0.1, msg = "ph")),
       case_espece("omble",
@@ -2627,7 +2873,7 @@ bloc_especes_ui <- function() {
             info_tip("Espèces présentes",
                      paste0("Ajuste les rendements des modèles selon la communauté présente."))),
         checkboxGroupInput("especes_presentes_omble", NULL,
-          choices = c("Achigan à petite bouche" = "achigan",
+          choices = c("Achigan"                 = "achigan",
                       "Barbotte brune"          = "barbotte",
                       "Doré jaune"              = "dore",
                       "Grand brochet"           = "brochet",
@@ -2664,7 +2910,7 @@ bloc_especes_ui <- function() {
 # -- Bloc 4 : Données d'exploitation (facultatif) -----------------------------
 bloc_exploitation_ui <- function() {
   div(class = "bloc-gauche",
-    div(class = "bloc-titre", "Données d'exploitation",
+    div(class = "bloc-titre", "Quota actuel et données d'exploitation",
         span(class = "bloc-titre-note", "(facultatif)")),
     div(class = "grille-2",
       case_espece("touladi", champ_num("quota_actuel_touladi", "Quota actuel (kg/an)", min = 0)),
@@ -2684,15 +2930,19 @@ bloc_exploitation_ui <- function() {
   )
 }
 
-# -- Page Information (BROUILLON, 2026-09) ------------------------------------
+# -- Page Information (allégée 2026-09-29) ------------------------------------
 # Construite à partir du registre (REGISTRE_ESPECES, MODELES_REGIONAUX) pour
 # rester synchronisée avec le code : ajouter un modèle au registre l'ajoute
-# ici. Les références sont en forme abrégée (auteur, année) : références
-# complètes et liens à ajouter si la page est conservée.
+# ici. Le mode d'emploi détaillé est dans le guide d'utilisation (lien
+# LIEN_GUIDE_UTILISATEUR) ; cette page ne garde que l'essentiel : modèles,
+# règles de calcul, fichiers attendus et références avec liens (REFERENCES).
 LIBELLES_INTRANTS <- c(
   A = "Superficie", Dmax = "Prof. max", Dmn = "Prof. moyenne",
   T_air = "T° moyenne annuelle de l'air",
-  Linf = "Longueur asymptotique (facultative)",
+  T_air_repli = "T° de l'air (requise seulement sans thermocline observée)",
+  TDS_optionnel = "Conductivité (facultative, repli à 0,60 kg/ha)",
+  Dmn_seule = "Prof. moyenne",
+  Linf = "Longueur asymptotique, longueur totale (facultative)",
   Dth_obs = "Prof. thermocline (facultative)",
   TDS = "Conductivité (convertie en SDT)", G = "Degrés-jours > 5 °C (DJC5)",
   z_sec = "Secchi", grp = "Espèces présentes", pH = "pH",
@@ -2706,6 +2956,11 @@ page_information_ui <- function() {
     tags$table(class = "table table-sm info-table",
       tags$thead(tags$tr(lapply(entetes, tags$th))),
       tags$tbody(lapply(lignes, function(l) tags$tr(lapply(l, tags$td)))))
+  }
+
+  lien <- function(url, texte = "Lien") {
+    if (is.null(url) || !nzchar(url)) return(NULL)
+    tags$a(href = url, target = "_blank", rel = "noopener", texte)
   }
 
   bloc_espece <- function(cle) {
@@ -2733,93 +2988,64 @@ page_information_ui <- function() {
   }
 
   div(class = "info-page",
-    div(class = "alerte-lacs",
-        tags$strong("Brouillon. "),
-        "Page en rédaction, références complètes et liens à ajouter."),
+    tags$p(class = "small",
+           "Cet outil estime le rendement maximal théorique d'un lac (kg/ha/an) selon plusieurs ",
+           "modèles publiés, puis en déduit un quota (kg/an). Le mode d'emploi détaillé est dans le ",
+           "guide d'utilisation",
+           if (nzchar(LIEN_GUIDE_UTILISATEUR))
+             tagList(" (", lien(LIEN_GUIDE_UTILISATEUR, "ouvrir le guide"), ")."),
+           if (!nzchar(LIEN_GUIDE_UTILISATEUR)) "."),
 
     tags$h5("Modèles par espèce"),
     tags$p(class = "small",
-           paste0("Le premier modèle de chaque espèce est le modèle recommandé. Si celui-ci est ",
-                  "indisponible (donnée non facultative manquante), le suivant dans l'ordre ",
-                  "ci-dessous sert de référence au quota")),
+           paste0("Le premier modèle de chaque espèce est le modèle recommandé. S'il est ",
+                  "indisponible (donnée obligatoire manquante), le suivant dans l'ordre ",
+                  "ci-dessous sert de référence au quota.")),
     lapply(ESPECES_ORDRE, bloc_espece),
 
-    tags$h5(class = "mt-4", "Règles de calcul"),
+    tags$h5(class = "mt-4", "Règles de calcul essentielles"),
     tags$ul(class = "small",
       tags$li(paste0("Quota (kg/an) = taux × rendement maximal théorique du modèle de référence ",
-                     "(kg/ha) × superficie.")),
-      tags$li(paste0("Quota recommandé : taux fixe de ", PCT_RECOMMANDE, " % (« pretty good yield », ",
-                     "Hilborn 2010). Quota révisé : taux choisi par le biologiste ",
-                     "Quota actuel : quota en vigueur saisi")),
-      tags$li(paste0("Longueur asymptotique (Touladi) : calculée à partir des spécimens ",
-                     "(méthode de Janošík, minimum 10 spécimens) ; à défaut, formule de Lester ",
-                     "(éq. 1, selon la superficie).")),
-      tags$li(paste0("Thermocline : détectée sur le profil de l'inventaire choisi (minimum 5 mesures de ",
-                     "profondeur, et choisi la station la plus profonde). Sinon, repli ",
-                     "théorique de Shuter et coll. (1983), qui requiert la T° de l'air.")),
-      tags$li(paste0("Conductivité et pH : mesure la plus récente entre l'onglet Parametre et ",
-                     "l'onglet Profil (une seule lecture, la plus proche de 5 m) ; le Profil ",
-                     "l'emporte à date égale. Secchi : onglet Parametre seulement. ",
+                     "(kg/ha) × superficie. Quota recommandé : taux fixe de ", PCT_RECOMMANDE,
+                     " % (« pretty good yield », Hilborn 2010). Quota révisé : taux choisi par ",
+                     "le biologiste.")),
+      tags$li(paste0("Longueur asymptotique (Touladi) : moyenne des 10 % plus grands poissons de ",
+                     "300 mm et plus en longueur à la fourche (Lester et coll. 2021) ; à défaut, ",
+                     "formule de Lester selon la superficie. L'interface affiche la longueur totale.")),
+      tags$li(paste0("Thermocline : bas du métalimnion (gradient ≥ 1 °C/m) sur le profil de ",
+                     "l'inventaire choisi (station la plus profonde, au moins 5 mesures). Sur les ",
+                     "profils de juillet-août, cette valeur est au niveau de la formule de Shuter et ",
+                     "coll. (1983) sur laquelle les modèles de Lester sont calibrés, contrairement à ",
+                     "la profondeur du gradient maximal (25 à 35 % moins profonde). Sinon, ou au ",
+                     "choix, valeur théorique de Shuter et coll. (1983) (Lester et coll. 2021, ",
+                     "éq. 33), qui demande la T° de l'air. Privilégier un profil de fin d'été. ",
+                     "La médiane des profils d'août-septembre du lac (dès 2 profils) peut aussi ",
+                     "être choisie : elle est plus fiable qu'un profil unique.")),
+      tags$li(paste0("Conductivité et pH : mesure la plus récente entre les onglets Parametre et ",
+                     "Profil (lecture la plus proche de 5 m). Secchi : onglet Parametre. ",
                      "SDT = conductivité × 0,666.")),
-      tags$li(paste0("Plusieurs stations à la même date : la station la plus profonde est retenue ",
-                     "(profondeur lue dans l'onglet Profil). Pour l'onglet Parametre, si la ",
-                     "profondeur des stations est inconnue ce jour-là, moyenne des stations.")),
-      tags$li(paste0("Morphométrie (onglet Lacs) : Unité d'Échantillonnage 'IPE' priorisé, sinon repli sur OG puis les autres ",
-                     "UE. l'UE d'origine est indiquée sous les champs.")),
-      tags$li(paste0("T° de l'air et DJC5 : grilles annuelles Info-Climat, extraites selon les ",
-                     "données de l'onglet Lac ou des coordonnées saisies.La grille ne couvre que le Québec.")),
-      tags$li(paste0("Lac absent de la liste : « Effacer la sélection » permet de saisir un nom ",
-                     "de lac et toutes ses données manuellement."))
-    ),
-
-    tags$h5(class = "mt-4", "Figure et export"),
-    tags$ul(class = "small",
-      tags$li(paste0("Figure « Positionnement des quotas » : une ligne en kg/an partant de 0. ",
-                     "Traits : quota recommandé (plein épais), quota révisé (plein fin, losange), ",
-                     "quota actuel (tirets). Triangle : récolte observée. Les modèles s'ajoutent en ",
-                     "cochant « Comparer » dans le tableau (rond plein : modèle de référence).")),
-      tags$li(paste0("Récolte observée : masse récoltée annuelle moyenne sur les 5, 10 ou 20 ",
-                     "dernières années disponibles du lac (5 par défaut) ; affichée seulement si le ",
-                     "lac d'exploitation est celui du calcul.")),
-      tags$li(paste0("« Enregistrer ce quota » conserve le quota révisé du lac et de l'espèce ",
-                     "pour la session ; l'export Excel regroupe les quotas enregistrés (quota ",
-                     "révisé, quota actuel, masse moyenne prélevée et succès moyen sur les 5 ",
-                     "dernières années disponibles, période couverte). Les quotas enregistrés ",
-                     "sont perdus à la fermeture de la session."))
+      tags$li(paste0("Morphométrie : UE « IPE » en priorité, puis « OG », puis les autres UE. ",
+                     "T° de l'air et DJC5 : grilles Info-Climat (Québec seulement), au point du lac."))
     ),
 
     tags$h5(class = "mt-4", "Fichiers d'importation"),
-    tags$p(class = "small", tags$strong("Potentiel halieutique"),
-           " (.xlsx ou .xlsm) — quatre onglets obligatoires. Valeurs manquantes : ",
-           "NULL (Lacs, Profil, Parametre) ou « - » (Specimens)."),
-    tableau(c("Onglet", "Colonnes lues"), list(
-      list("Lacs", "No plan d'eau, Nom plan d'eau, Superficie, Prof. max, Prof. moy (obligatoires) ; Latitude, Longitude, Périmètre, No UE (facultatives)"),
-      list("Profil", "No plan d'eau, Date, No inventaire, No station, Profondeur, Température, Oxygène, pH, Conductivité"),
-      list("Parametre", "No plan d'eau, Date, No station, Paramètre physico-chimique (codes CD, TR, PH), Résultat"),
-      list("Specimens", "No plan d'eau, Année début inventaire, Espèce code (SANA, SAVI, SAFO), Long. totale max")
+    tableau(c("Fichier", "Contenu attendu"), list(
+      list("Potentiel halieutique (.xlsx, .xlsm)",
+           paste0("Quatre onglets : Lacs (no et nom du plan d'eau, superficie, prof. max, ",
+                  "prof. moy., coordonnées), Profil (profils de température et d'oxygène), ",
+                  "Parametre (codes CD, TR, PH), Specimens (longueurs des poissons). ",
+                  "Valeurs manquantes : NULL, ou « - » dans Specimens.")),
+      list("Données d'exploitation (.xlsx, .xlsm)",
+           paste0("No plan d'eau, Année, Espèce code, Nombre capturés, Nombre pesés, ",
+                  "Masse mesurée (kg), Effort total (j-p)."))
     )),
-    tags$p(class = "small", tags$strong("Données d'exploitation"),
-           " (.xlsx ou .xlsm) — colonnes obligatoires : No plan d'eau, Année, Espèce code, ",
-           "Nombre capturés, Nombre pesés, Masse mesurée (kg), Effort total (jours-pêche). ",
-           "Facultatives : Territoire, Nom plan d'eau, Type de pêche, Type de récolte."),
     tags$p(class = "small text-muted",
            "Les colonnes sont reconnues par leur nom, sans égard aux majuscules ni aux accents."),
 
-    tags$h5(class = "mt-4", "Références (forme abrégée)"),
+    tags$h5(class = "mt-4", "Références"),
     tags$ul(class = "small",
-      tags$li("Lester et coll. (2021) — A General, Life History-Based Model for Sustainable Exploitation of Lake Charr Across Their Range. [lien à ajouter]"),
-      tags$li("Lester et coll. (2002) — The Effect of Water Clarity on Walleye (Stizostedion vitreum) Habitat and Yield. [lien à ajouter]"),
-      tags$li("Shuter (1998) — A general, life history based model for regional management of fish stocks: the inland lake trout (Salvelinus namaycush) fisheries of Ontario. [lien à ajouter]"),
-      tags$li("Shuter et coll. (1983) — profondeur théorique de la thermocline. [lien à ajouter]"),
-      tags$li("Ryder (1965) et OMNR (1982) — Partitioning Yields Estimated from Morphoedaphic Index into Individual Species Yields. [lien à ajouter]"),
-      tags$li("Loranger (1986) — Applicabilité de l'indice morphoédaphique pour prédire le rendement de la pêche sportive dans les lacs du territoire à accès controlé du Québec. [lien à ajouter]"),
-      tags$li("Valin (1998) ; Vaillancourt (1998) — Omble de fontaine, Touladi, Doré jaune. [lien à ajouter]"),
-      tags$li("Archambault (1988, 2009) ; Houde (1982) — Omble de fontaine. [lien à ajouter]"),
-      tags$li("Vézina (1978) — Omble de fontaine. [lien à ajouter]"),
-      tags$li("Vaillancourt et Boivin (2000) — quotas de départ, Omble de fontaine. [lien à ajouter]"),
-      tags$li("Janošík — estimation de la longueur asymptotique. [référence à compléter]"),
-      tags$li("Hilborn (2010) — « pretty good yield ». [lien à ajouter]")
-    )
+      lapply(REFERENCES, function(r)
+        tags$li(r$texte, if (nzchar(r$url)) tagList(" ", lien(r$url)))))
   )
 }
 
@@ -2843,6 +3069,31 @@ ui <- fluidPage(
         Shiny.setInputValue('modele_comparer',
           { cle: $(this).data('cle'), coche: this.checked }, { priority: 'event' });
       });
+      // Avertissement avant de quitter si des quotas enregistrés n'ont pas été
+      // exportés (2026-09-29) : la session ne conserve rien après fermeture.
+      window.quotasNonExportes = 0;
+      Shiny.addCustomMessageHandler('quotas_non_exportes', function(n) {
+        window.quotasNonExportes = n;
+      });
+      window.addEventListener('beforeunload', function(e) {
+        if (window.quotasNonExportes > 0) { e.preventDefault(); e.returnValue = ''; }
+      });
+      // Valeur calculée par une formule : style gris italique (2026-09-30)
+      Shiny.addCustomMessageHandler('champ_calcule', function(m) {
+        var el = document.getElementById(m.id);
+        if (!el) return;
+        var c = el.closest('.champ') || el.parentNode;
+        if (c) c.classList.toggle('champ-calcule', !!m.on);
+      });
+      // Lien « ↓ » : défiler jusqu'à un champ et le mettre en évidence
+      window.allerAuChamp = function(id) {
+        var el = document.getElementById(id);
+        if (!el) return false;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.remove('flash-champ'); void el.offsetWidth; el.classList.add('flash-champ');
+        setTimeout(function() { el.focus(); }, 400);
+        return false;
+      };
       Shiny.addCustomMessageHandler('reinit_fichier', function(id) {
         var el = document.getElementById(id);
         if (el) el.value = '';
@@ -2872,7 +3123,13 @@ ui <- fluidPage(
       bloc_climat_ui(),
       bloc_especes_ui(),
       bloc_exploitation_ui(),
-      uiOutput("save_params_ui")
+      uiOutput("save_params_ui"),
+      # Second bouton Calculer (2026-09-29) : évite de remonter en haut de la
+      # page après avoir rempli le panneau. Il déclenche le bouton principal,
+      # donc la même logique (contrôles, libellé « Recalculer »).
+      tags$button(type = "button", class = "btn btn-primary fw-bold w-100 calc-bas",
+                  onclick = "document.getElementById('btn_calc').click();",
+                  icon("calculator"), " Calculer")
     ),
 
     # =========================================================================
@@ -2907,8 +3164,8 @@ ui <- fluidPage(
                 div(class = "kpi-eyebrow",
                     info_tip("Quota révisé",
                              paste0("Quota révisé par le biologiste. Le taux ",
-                                    "recommandé (80 %) est le point de départ. Un quota révisé  ",
-                                    "est justifié et recommandé après analyses des données d'exploitation, de l'état de la ",
+                                    "recommandé (80 %) est le point de départ. Un quota révisé ",
+                                    "se justifie après analyse des données d'exploitation, de l'état de la ",
                                     "population et des objectifs de gestion."))),
                 uiOutput("revise_valeur_ui"),
                 div(class = "quota-derivation",
@@ -2935,7 +3192,7 @@ ui <- fluidPage(
             div(class = "d-flex justify-content-between align-items-center mb-1",
               tags$strong("Détail par modèle"),
               actionButton("btn_toggle_detail", "▾ Masquer",
-                           class = "btn btn-sm btn-link p-0 text-muted",
+                           class = "btn btn-sm btn-link p-0 text-muted lien-masquer",
                            style = "text-decoration:none; font-size:12px;")
             ),
             uiOutput("detail_table_container")
@@ -3121,6 +3378,14 @@ server <- function(input, output, session) {
   observeEvent(pct_manual_d(), {
     req(!is.null(pct_manual_d()), !is.na(pct_manual_d()))
     val <- max(1L, min(200L, as.integer(round(pct_manual_d()))))
+    # B14 (2026-09-29) : une valeur ramenée dans 1-200 % est réaffichée dans le
+    # champ — avant, le champ montrait 250 alors que le calcul utilisait 200.
+    if (!isTRUE(abs(pct_manual_d() - val) < 1e-9)) {
+      updateNumericInput(session, "pct_manual", value = val)
+      if (pct_manual_d() < 1 || pct_manual_d() > 200)
+        showNotification(paste0("Taux ramené à ", val, " % (plage permise : 1 à 200 %)."),
+                         type = "warning", duration = 4)
+    }
     pct_rv(val)
   }, ignoreInit = TRUE, ignoreNULL = TRUE)
 
@@ -3195,6 +3460,8 @@ server <- function(input, output, session) {
       if ("annee" %in% names(specimens))  specimens$annee <- extraire_annee(specimens$annee)
       if ("long_totale" %in% names(specimens))
         specimens$long_totale <- suppressWarnings(as.numeric(specimens$long_totale))
+      if ("long_fourche" %in% names(specimens))
+        specimens$long_fourche <- suppressWarnings(as.numeric(specimens$long_fourche))
 
       req_lacs <- c("nolac", "sup", "prof_max", "prof_moy")
       manq_lacs <- setdiff(req_lacs, names(lacs))
@@ -3378,9 +3645,13 @@ server <- function(input, output, session) {
         if (!is.na(st$station) && st$n_stations > 1)
           date_lbl <- paste0(date_lbl, " \u2014 station ", st$station)
         n_pts     <- sum(!is.na(sub$prof_mes) & !is.na(sub$temp))
+        # Mois du profil (B3) : sert à privilégier les profils d'été
+        mois_inv  <- if (has_date && any(!is.na(sub$date)))
+                       as.integer(format(min(sub$date, na.rm = TRUE), "%m")) else NA_integer_
         data.frame(
           inv_key       = k,
           date_label    = date_lbl,
+          mois          = mois_inv,
           n_pts         = n_pts,
           profil_valide = n_pts >= 5L,
           sup           = sup_val,
@@ -3419,8 +3690,15 @@ server <- function(input, output, session) {
       })
       names(profils) <- invs$inv_key
 
+      # Inventaire par défaut (B3, 2026-09-29) : le profil valide le plus
+      # récent de la saison estivale (MOIS_ESTIVAUX, juin à septembre), puis, à
+      # défaut, le plus récent toutes saisons. Avant, un profil de mars sous la
+      # glace pouvait être retenu (48 lacs sur 382 dans R08) : thermocline
+      # absente et déficit d'O2 hivernal appliqué au rendement de l'Omble.
       inv_valides <- invs[invs$profil_valide, ]
-      inv_defaut  <- if (nrow(inv_valides) > 0) inv_valides$inv_key[1] else NA_character_
+      inv_ete     <- inv_valides[!is.na(inv_valides$mois) & inv_valides$mois %in% MOIS_ESTIVAUX, ]
+      inv_defaut  <- if (nrow(inv_ete) > 0) inv_ete$inv_key[1]
+                     else if (nrow(inv_valides) > 0) inv_valides$inv_key[1] else NA_character_
 
       note_lac <- if (!is.na(nomlac_val)) nomlac_val else paste0("lac ", lac_courant_rv())
       n_inv    <- nrow(invs)
@@ -3449,7 +3727,6 @@ server <- function(input, output, session) {
     updateNumericInput(session, "prof_moy",     value = inv_row$prof_moy)
     updateNumericInput(session, "conductivite", value = inv_row$cond)
     updateNumericInput(session, "secchi",       value = inv_row$secchi)
-    updateNumericInput(session, "perimetre",    value = inv_row$perimetre)
     updateNumericInput(session, "ph_eau",       value = inv_row$ph)
   }
 
@@ -3462,6 +3739,19 @@ server <- function(input, output, session) {
     choix <- input$ifa_inv_choisi
     if (!is.null(choix) && nzchar(choix) && !is.null(ifa$inventaires) &&
         choix %in% ifa$inventaires$inv_key) choix else ifa$inv_defaut
+  }
+
+  # Avertissement (B3) : l'inventaire utilisé pour la thermocline ou l'O2
+  # est-il hors de la saison estivale ? Retourne le texte, ou NULL.
+  alerte_hors_saison <- function() {
+    ifa <- tryCatch(ifa_habitat_raw(), error = function(e) NULL)
+    if (is.null(ifa) || is.null(ifa$inventaires) || !("mois" %in% names(ifa$inventaires)))
+      return(NULL)
+    k <- inv_effectif(ifa)
+    if (is.na(k)) return(NULL)
+    m <- ifa$inventaires$mois[ifa$inventaires$inv_key == k][1]
+    if (is.na(m) || m %in% MOIS_ESTIVAUX) return(NULL)
+    "Profil hors saison estivale (juin à septembre) — valeur à interpréter avec prudence."
   }
 
   observeEvent(ifa_habitat_raw(), {
@@ -3479,7 +3769,6 @@ server <- function(input, output, session) {
       updateNumericInput(session, "prof_moy",     value = NA)
       updateNumericInput(session, "conductivite", value = NA)
       updateNumericInput(session, "secchi",       value = NA)
-      updateNumericInput(session, "perimetre",    value = NA)
       updateNumericInput(session, "ph_eau",       value = NA)
       return()
     }
@@ -3492,7 +3781,6 @@ server <- function(input, output, session) {
     cle_inv <- if (!is.na(ifa$inv_defaut)) ifa$inv_defaut else ifa$inventaires$inv_key[1]
     inv_row <- ifa$inventaires[ifa$inventaires$inv_key == cle_inv, ]
     if (nrow(inv_row) > 0) remplir_morpho_depuis_inv(session, inv_row[1, ])
-    warnings_actifs_rv(TRUE)
   })
 
   # Changement d'inventaire : la thermocline et l'O2 suivent automatiquement
@@ -3526,7 +3814,7 @@ server <- function(input, output, session) {
   # ---------------------------------------------------------------------------
   # ---------------------------------------------------------------------------
   # Linf (Touladi) — trois sources, choisies par mode_src$linf() :
-  #   "file"      : spécimens du fichier (méthode Janošík) — défaut
+  #   "file"      : spécimens du fichier (méthode de Lester, en LF) — défaut
   #   "theorique" : formule de Lester (éq. 1), à partir de la superficie
   #   "manual"    : valeur saisie dans le champ
   # En mode "file", s'il n'y a pas assez de spécimens, la valeur est NA et le
@@ -3560,37 +3848,43 @@ server <- function(input, output, session) {
       df_f <- df_f[!is.na(df_f$espece_code) &
                    toupper(trimws(df_f$espece_code)) == config()$code_ifa, ]
 
+    # Longueur à la fourche de chaque poisson : mesurée si la colonne existe,
+    # sinon convertie de la longueur totale (le modèle est calibré en LF).
     lt_vec <- suppressWarnings(as.numeric(df_f$long_totale))
-    lt_vec <- lt_vec[!is.na(lt_vec) & lt_vec > 0]
-    n_spec <- length(lt_vec)
+    lf_mes <- if ("long_fourche" %in% names(df_f))
+                suppressWarnings(as.numeric(df_f$long_fourche)) else rep(NA_real_, nrow(df_f))
+    lf_mes[!is.na(lf_mes) & lf_mes <= 0] <- NA_real_
+    lt_vec[!is.na(lt_vec) & lt_vec <= 0] <- NA_real_
+    lf_vec <- ifelse(!is.na(lf_mes), lf_mes, lt_vers_lf(lt_vec))
+    n_spec <- sum(!is.na(lf_vec))
 
-    # Seuil de 10 spécimens conservé tel quel (valeur de la version
-    # précédente) : en deçà, l'estimation de Janošík est jugée trop instable.
-    if (n_spec < 10L)
+    if (n_spec == 0L)
+      return(list(value = NA_real_, source = "aucun spécimen", n = 0L, note = ""))
+
+    est <- calc_linf_lester(lf_vec)
+    if (is.na(est$value))
       return(list(value = NA_real_,
-                  source = if (n_spec == 0L) "aucun spécimen"
-                           else paste0("spécimens insuffisants (n = ", n_spec, ", min. 10)"),
-                  n = n_spec, note = ""))
+                  source = paste0("poissons \u2265 300 mm LF insuffisants (n = ", est$n,
+                                  ", min. ", LINF_N_MIN, ")"),
+                  n = est$n, note = ""))
 
-    linf_val <- calc_linf_janoscik(lt_vec)
-    if (is.na(linf_val))
-      return(list(value = NA_real_,
-                  source = "Linf non calculable (échantillon insuffisant après coupe)",
-                  n = n_spec, note = ""))
-
-    list(value  = round(linf_val, 1),
-         source = paste0("spécimens (n = ", n_spec, ", Janošík)"),
-         n      = n_spec,
-         note   = if (n_spec < 20L)
-                    paste0("Échantillon faible (n = ", n_spec, ") — interpréter avec prudence")
-                  else "")
+    # value : en LONGUEUR TOTALE, unité de l'interface (champ et affichage).
+    # resolve_linf() la reconvertit en LF pour le modèle.
+    list(value    = round(lf_vers_lt(est$value), 1),
+         value_lf = round(est$value, 1),
+         source   = paste0("spécimens (n = ", est$n, " \u2265 300 mm LF, méthode de Lester)"),
+         n        = est$n,
+         note     = if (est$n < LINF_N_FIABLE)
+                      paste0("Linf fragile : seulement ", est$n,
+                             " poissons \u2265 300 mm — le rendement y est très sensible")
+                    else "")
   })
 
   # Formule de Lester (éq. 1) — dépend seulement de la superficie
   linf_theorique <- reactive({
     sup_val <- input$sup
     if (is.null(sup_val) || is.na(sup_val) || sup_val <= 0) return(NA_real_)
-    round(resolve_linf(NA_real_, sup_val)$value, 1)
+    round(resolve_linf(NA_real_, sup_val)$value_lt, 1)   # affiché en LT
   })
 
   linf_resolved <- reactive({
@@ -3723,15 +4017,76 @@ server <- function(input, output, session) {
   t_air_effectif <- reactive(tair_resolu()$value)
   g_effectif     <- reactive(g_resolu()$value)
 
+  # Thermocline — quatre sources, choisies par mode_src$therm() :
+  #   "ifa"       : profil de l'inventaire, bas du métalimnion (défaut)
+  #   "mediane"   : médiane du bas du métalimnion des profils valides
+  #                 d'août-septembre du lac (au moins N_MIN_MEDIANE_DTH)
+  #   "theorique" : formule de Lester (éq. 33 = Shuter et coll. 1983), comme
+  #                 le script 05b. La valeur est affichée dans le champ, mais
+  #                 les modèles reçoivent NA (voir dth_modele()) et appliquent
+  #                 leur formule interne, pour que la source soit étiquetée
+  #                 « théorique » et non « observé ».
+  #   "manual"    : valeur saisie
+  # Profondeur théorique (Lester éq. 33 = Shuter et coll. 1983) — calculée dès
+  #   que possible : valeur du mode « theorique », repli affiché sinon, et
+  #   valeur proposée dans le lien « Formule Lester » sous le champ.
+  dth_theorique <- reactive({
+    A <- input$sup; Dmn <- input$prof_moy; Dmax <- input$prof_max; ta <- t_air_effectif()
+    if (is.null(A) || is.null(Dmn) || is.null(Dmax)) return(NA_real_)
+    if (is.na(A) || is.na(Dmn) || is.na(Dmax) || is.na(ta) || A <= 0 || Dmn <= 0 || Dmax <= 0)
+      return(NA_real_)
+    val <- 3.26 * (A^0.109) * (Dmn^0.213) * exp(-0.0263 * ta)
+    if (is.finite(val) && val > 0 && val < Dmax) round(val, 2) else NA_real_
+  })
+
+  # Médiane du bas du métalimnion des profils valides d'août-septembre du lac.
+  #   Même sélection de station et même détection que le mode « ifa » ; seuls
+  #   les profils stratifiés comptent. value = NA sous N_MIN_MEDIANE_DTH.
+  dth_mediane_ete <- reactive({
+    vide <- list(value = NA_real_, n = 0L, dates = character(0), valeurs = numeric(0))
+    ifa <- tryCatch(ifa_habitat_raw(), error = function(e) NULL)
+    if (is.null(ifa) || is.null(ifa$inventaires) || length(ifa$profils) == 0) return(vide)
+    inv <- ifa$inventaires
+    inv <- inv[inv$profil_valide & !is.na(inv$mois) & inv$mois %in% MOIS_MEDIANE_DTH, ]
+    if (nrow(inv) == 0) return(vide)
+    res <- lapply(seq_len(nrow(inv)), function(i) {
+      p <- ifa$profils[[inv$inv_key[i]]]
+      if (is.null(p) || nrow(p) < 5L) return(NULL)
+      th <- detect_thermocline_norm(p)
+      if (th$statut != "stratifie" || is.na(th$z_hypo)) return(NULL)
+      data.frame(date = inv$date_label[i], z = th$z_hypo, stringsAsFactors = FALSE)
+    })
+    res <- do.call(rbind, Filter(Negate(is.null), res))
+    if (is.null(res) || nrow(res) == 0) return(vide)
+    list(value   = if (nrow(res) >= N_MIN_MEDIANE_DTH) stats::median(res$z) else NA_real_,
+         n       = nrow(res),
+         dates   = res$date,
+         valeurs = res$z)
+  })
+
   therm_resolved <- reactive({
-    # Profondeur théorique (repli Shuter et coll. 1983) — calculée dès que
-    #   possible, affichée même quand elle ne sert que de repli informatif
-    #   (cf. therm_result_ui) et non comme valeur utilisée par le modèle.
-    calc_dth_theo <- function() {
-      A <- input$sup; Dmn <- input$prof_moy; Dmax <- input$prof_max; ta <- t_air_effectif()
-      if (is.na(A) || is.na(Dmn) || is.na(Dmax) || is.na(ta) || Dmn <= 0 || Dmax <= 0) return(NA_real_)
-      val <- 3.26 * (A^0.109) * (Dmn^0.213) * exp(-0.0263 * ta)
-      if (is.finite(val) && val > 0 && val < Dmax) round(val, 2) else NA_real_
+    calc_dth_theo <- function() dth_theorique()
+
+    if (identical(mode_src$therm(), "mediane")) {
+      md <- dth_mediane_ete()
+      return(list(value      = md$value,
+                  source     = paste0("médiane de ", md$n, " profil(s) d'août-septembre"),
+                  date_label = NULL,
+                  details    = md,
+                  theorique  = calc_dth_theo(),
+                  note       = if (is.na(md$value))
+                                 "Moins de 2 profils valides en août-septembre — repli théorique (Shuter)."
+                               else ""))
+    }
+
+    if (identical(mode_src$therm(), "theorique")) {
+      theo <- calc_dth_theo()
+      return(list(value      = theo,
+                  source     = "formule Lester (éq. 33, Shuter et coll. 1983)",
+                  date_label = NULL,
+                  details    = NULL,
+                  theorique  = theo,
+                  note       = if (is.na(theo)) "T° de l'air ou morphométrie requise." else ""))
     }
 
     if (identical(mode_src$therm(), "manual")) {
@@ -3742,51 +4097,68 @@ server <- function(input, output, session) {
            details    = NULL,
            theorique  = calc_dth_theo(),
            note       = "")
-    } else {
-      # Mode IFA : utiliser le profil de l'inventaire sélectionné
-      ifa <- tryCatch(ifa_habitat_raw(), error = function(e) NULL)
-      if (is.null(ifa) || is.null(ifa$inventaires))
-        return(list(value = NA_real_, source = "IFA : fichier non chargé",
-                    date_label = NULL, details = NULL, theorique = calc_dth_theo(), note = ""))
+    } else therm_profil()
+  })
 
-      # Clé d'inventaire : sélection de l'utilisateur si elle appartient au
-      # lac courant, sinon l'inventaire par défaut (voir inv_effectif())
-      inv_key <- inv_effectif(ifa)
+  # Thermocline du profil de l'inventaire sélectionné (mode « ifa »), calculée
+  # quel que soit le mode actif : sert aussi à la pastille « Profil ».
+  therm_profil <- reactive({
+    calc_dth_theo <- function() dth_theorique()
+    # Mode IFA : utiliser le profil de l'inventaire sélectionné
+    ifa <- tryCatch(ifa_habitat_raw(), error = function(e) NULL)
+    if (is.null(ifa) || is.null(ifa$inventaires))
+      return(list(value = NA_real_, source = "IFA : fichier non chargé",
+                  date_label = NULL, details = NULL, theorique = calc_dth_theo(), note = ""))
 
-      if (is.na(inv_key) || is.null(ifa$profils[[inv_key]]))
-        return(list(value   = NA_real_,
-                    source  = "IFA : aucun inventaire avec profil valide",
-                    date_label = NULL, details = NULL,
-                    theorique  = calc_dth_theo(),
-                    note    = "Repli sur la thermocline théorique (Shuter)."))
+    # Clé d'inventaire : sélection de l'utilisateur si elle appartient au
+    # lac courant, sinon l'inventaire par défaut (voir inv_effectif())
+    inv_key <- inv_effectif(ifa)
 
-      profil_sel <- ifa$profils[[inv_key]]
-      if (nrow(profil_sel) < 5L)
-        return(list(value   = NA_real_,
-                    source  = paste0("IFA (inventaire ", inv_key, ") : moins de 5 points"),
-                    date_label = NULL, details = NULL,
-                    theorique  = calc_dth_theo(),
-                    note    = "Repli sur la thermocline théorique (Shuter)."))
+    if (is.na(inv_key) || is.null(ifa$profils[[inv_key]]))
+      return(list(value   = NA_real_,
+                  source  = "IFA : aucun inventaire avec profil valide",
+                  date_label = NULL, details = NULL,
+                  theorique  = calc_dth_theo(),
+                  note    = "Repli sur la thermocline théorique (Shuter)."))
 
-      th <- detect_thermocline_norm(profil_sel)
-      inv_info <- ifa$inventaires[ifa$inventaires$inv_key == inv_key, ]
-      date_lbl <- if (nrow(inv_info) > 0) inv_info$date_label[1] else inv_key
+    profil_sel <- ifa$profils[[inv_key]]
+    if (nrow(profil_sel) < 5L)
+      return(list(value   = NA_real_,
+                  source  = paste0("IFA (inventaire ", inv_key, ") : moins de 5 points"),
+                  date_label = NULL, details = NULL,
+                  theorique  = calc_dth_theo(),
+                  note    = "Repli sur la thermocline théorique (Shuter)."))
 
-      if (th$statut != "stratifie" || is.na(th$z_hypo))
-        return(list(value   = NA_real_,
-                    source  = paste0("IFA (", date_lbl, ") : ", th$raison),
-                    date_label = date_lbl, details = th,
-                    theorique  = calc_dth_theo(),
-                    note    = "Repli sur la thermocline théorique (Shuter)."))
+    th <- detect_thermocline_norm(profil_sel)
+    inv_info <- ifa$inventaires[ifa$inventaires$inv_key == inv_key, ]
+    date_lbl <- if (nrow(inv_info) > 0) inv_info$date_label[1] else inv_key
 
-      list(value      = th$z_hypo,
-           source     = paste0("IFA (", date_lbl, ") — z_hypo = ", th$z_hypo,
-                            " m, thermo ", th$z_thermo_top, "–", th$z_thermo_bot, " m"),
-           date_label = date_lbl,
-           details    = th,
-           theorique  = NA_real_,
-           note       = "")
-    }
+    if (th$statut != "stratifie" || is.na(th$z_hypo))
+      return(list(value   = NA_real_,
+                  source  = paste0("IFA (", date_lbl, ") : ", th$raison),
+                  date_label = date_lbl, details = th,
+                  theorique  = calc_dth_theo(),
+                  note    = "Repli sur la thermocline théorique (Shuter)."))
+
+    # Dth = bas du métalimnion (échelle de la formule de Shuter, voir
+    # detect_thermocline_norm()). Le gradient maximal est affiché en info.
+    list(value      = th$z_hypo,
+         source     = paste0("IFA (", date_lbl, ") — bas du métalimnion à ",
+                          th$z_hypo, " m (métalimnion ", th$z_thermo_top, "–",
+                          th$z_thermo_bot, " m ; gradient max. à ",
+                          fmt_nb(th$z_grad_max, 1), " m)"),
+         date_label = date_lbl,
+         details    = th,
+         theorique  = NA_real_,
+         note       = "")
+  })
+
+  # Thermocline passée aux modèles (Dth_obs). En mode « theorique », NA : les
+  # modèles appliquent eux-mêmes la formule de Shuter avec la même T° de
+  # l'air, ce qui donne la même valeur et l'étiquette « théorique ».
+  dth_modele <- reactive({
+    if (identical(mode_src$therm(), "theorique")) return(NA_real_)
+    tryCatch(therm_resolved()$value, error = function(e) NA_real_)
   })
 
   # Résolution de la réduction O2 (Omble, Valin/Vaillancourt) — même patron
@@ -3868,6 +4240,25 @@ server <- function(input, output, session) {
 
   historique_src <- lapply(CHAMPS_SOURCES, function(ch) reactiveVal(numeric(0)))
 
+  # Valeurs de repli affichées quand la source automatique est vide (2026-09-30)
+  valeur_repli <- list(linf  = function() linf_theorique(),
+                       therm = function() dth_theorique())
+
+  # Champ en gris italique quand sa valeur vient d'une formule (repli ou choix)
+  observe({
+    linf_calc <- !identical(mode_src$linf(), "manual") &&
+                 (identical(mode_src$linf(), "theorique") || is.na(linf_specimens()$value))
+    tp <- tryCatch(therm_profil(), error = function(e) NULL)
+    therm_calc <- switch(mode_src$therm(),
+                         manual    = FALSE,
+                         theorique = TRUE,
+                         mediane   = is.na(dth_mediane_ete()$value),
+                         ifa       = is.null(tp) || is.na(tp$value),
+                         TRUE)
+    session$sendCustomMessage("champ_calcule", list(id = "linf_manual",  on = linf_calc))
+    session$sendCustomMessage("champ_calcule", list(id = "therm_manual", on = therm_calc))
+  })
+
   reinitialiser_modes_src <- function() {
     for (cle in names(CHAMPS_SOURCES)) mode_src[[cle]](CHAMPS_SOURCES[[cle]]$defaut)
   }
@@ -3898,6 +4289,10 @@ server <- function(input, output, session) {
     observe({
       if (identical(mode_src[[cle]](), "manual")) return()
       v <- tryCatch(resolu_src[[cle]]()$value, error = function(e) NA_real_)
+      # Sans valeur mesurée, le champ affiche la valeur de repli réellement
+      # utilisée par le modèle (formule de Lester) plutôt que de rester vide
+      if (is.na(v) && !is.null(valeur_repli[[cle]]))
+        v <- tryCatch(valeur_repli[[cle]](), error = function(e) NA_real_)
       isolate(pousser_src(cle, v))
     })
 
@@ -3924,6 +4319,29 @@ server <- function(input, output, session) {
                                     "{priority: 'event'}); return false;"), cle, mode),
            libelle)
   }
+  # Pastilles de choix de source (2026-09-30).
+  #   actif : source utilisée (colorée, non cliquable)
+  #   dispo : FALSE -> grisée, avec la raison en infobulle (info)
+  #   js    : action JS de remplacement (ex. défiler vers un autre champ)
+  pastille <- function(cle, mode, libelle, actif = FALSE, dispo = TRUE, info = NULL, js = NULL) {
+    if (actif) return(tags$span(class = "pastille active", title = info, libelle))
+    if (!dispo && is.null(js)) return(tags$span(class = "pastille inactive", title = info, libelle))
+    onclick <- if (!is.null(js)) paste0(js, " return false;") else
+      sprintf(paste0("Shiny.setInputValue('src_switch', ",
+                     "{cle: '%s', mode: '%s', n: Math.random()}, ",
+                     "{priority: 'event'}); return false;"), cle, mode)
+    tags$a(href = "#", class = paste("pastille", if (!dispo) "inactive"),
+           title = info, onclick = onclick, libelle)
+  }
+  rangee_pastilles <- function(..., texte = NULL, alerte = NULL) {
+    alerte <- alerte[!is.na(alerte) & nzchar(alerte)]
+    div(class = "src-pastilles",
+        if (!is.null(texte)) span(class = "src-texte", texte),
+        Filter(Negate(is.null), list(...)),
+        if (length(alerte) > 0)
+          span(class = "pastille-alerte", title = paste(alerte, collapse = " "), "\u26a0"))
+  }
+
   ligne_src <- function(texte, liens = list(), alerte = NULL) {
     liens <- Filter(Negate(is.null), liens)
     tagList(
@@ -3946,51 +4364,82 @@ server <- function(input, output, session) {
     m    <- mode_src$linf()
     spec <- linf_specimens()
     theo <- linf_theorique()
-    txt_theo <- if (!is.na(theo)) paste0(" (\u2248 ", fmt_nb(theo, 0), " mm)") else ""
-    lien_spec  <- if (!is.na(spec$value)) lien_src("linf", "file", "\u21ba Spécimens") else NULL
-    lien_theo  <- lien_src("linf", "theorique", "Formule Lester")
-    if (identical(m, "manual")) {
-      v <- input$linf_manual
-      if (is.null(v) || is.na(v))
-        ligne_src(paste0("Champ vide — formule de Lester utilisée automatiquement", txt_theo),
-                  list(lien_spec))
-      else ligne_src("Saisie manuelle", list(lien_spec, lien_theo))
-    } else if (identical(m, "theorique")) {
-      ligne_src(if (is.na(theo)) "Formule de Lester — superficie requise"
-                else "Formule de Lester (théorique)", list(lien_spec))
-    } else if (!is.na(spec$value)) {
-      ligne_src(paste0("Calculé à partir des ", spec$source), list(lien_theo), alerte = spec$note)
-    } else {
-      motif <- if (grepl("non chargé", spec$source)) "aucune donnée de spécimens" else spec$source
-      ligne_src(paste0(maj1(motif), " — formule de Lester utilisée automatiquement", txt_theo))
-    }
+    spec_ok <- !is.na(spec$value)
+    # Source réellement utilisée par le modèle
+    actif <- if (identical(m, "manual") && !is.null(input$linf_manual) && !is.na(input$linf_manual)) "manual"
+             else if (identical(m, "theorique") || !spec_ok) "theorique" else "file"
+    p_spec <- pastille("linf", "file",
+                       if (spec_ok) paste0("Spécimens ", fmt_nb(spec$value, 0), " (n = ", spec$n, ")")
+                       else "Spécimens",
+                       actif = actif == "file", dispo = spec_ok,
+                       info = if (spec_ok) spec$source else maj1(spec$source))
+    p_theo <- pastille("linf", "theorique",
+                       if (!is.na(theo)) paste0("Lester ", fmt_nb(theo, 0),
+                                               if (actif == "theorique" && identical(m, "file")) " (repli)")
+                       else "Lester",
+                       actif = actif == "theorique", dispo = !is.na(theo),
+                       info = if (is.na(theo)) "Superficie requise" else
+                         "Formule de Lester (éq. 1), selon la superficie — valeur en longueur totale")
+    rangee_pastilles(texte = if (actif == "manual") "Saisie \u00b7" else NULL,
+                     p_spec, p_theo,
+                     alerte = if (actif == "file") spec$note else NULL)
   })
 
   # --- Thermocline ----------------------------------------------------------
   output$src_therm_manual <- renderUI({
-    m  <- mode_src$therm()
-    tr <- tryCatch(therm_resolved(), error = function(e) NULL)
-    req(!is.null(tr))
-    # Valeur du profil (indépendante du mode) : sert à offrir le lien de retour
-    profil_dispo <- {
-      ifa <- tryCatch(ifa_habitat_raw(), error = function(e) NULL)
-      !is.null(ifa) && !is.na(inv_effectif(ifa))
-    }
-    lien_profil <- if (profil_dispo) lien_src("therm", "ifa", "\u21ba Profil") else NULL
-    txt_repli <- if (!is.null(tr$theorique) && !is.na(tr$theorique))
-      paste0("repli théorique (Shuter) : ", fmt_nb(tr$theorique, 1), " m")
-    else "repli théorique (Shuter) indisponible sans T° air"
-    if (identical(m, "manual")) {
-      v <- input$therm_manual
-      if (is.null(v) || is.na(v)) ligne_src(paste0("Champ vide — ", txt_repli), list(lien_profil))
-      else ligne_src("Saisie manuelle", list(lien_profil))
-    } else if (!is.na(tr$value)) {
-      ligne_src(paste0("Profil du ", tr$date_label))
-    } else {
-      motif <- sub("^IFA( \\([^)]*\\))? ?: ?", "", tr$source)
-      if (grepl("non chargé", motif)) motif <- "aucun profil"
-      ligne_src(paste0(if (nzchar(motif)) paste0(maj1(motif), " — ") else "", txt_repli))
-    }
+    m    <- mode_src$therm()
+    tp   <- tryCatch(therm_profil(), error = function(e) NULL)
+    md   <- dth_mediane_ete()
+    theo <- dth_theorique()
+    prof_ok <- !is.null(tp) && !is.na(tp$value)
+    med_ok  <- !is.na(md$value)
+    # Source réellement utilisée : un mode automatique sans valeur retombe sur
+    # la formule (les modèles reçoivent NA et appliquent Shuter)
+    v_man <- input$therm_manual
+    actif <- if (identical(m, "manual") && !is.null(v_man) && !is.na(v_man)) "manual"
+             else if (identical(m, "ifa") && prof_ok) "ifa"
+             else if (identical(m, "mediane") && med_ok) "mediane" else "theorique"
+    repli <- actif == "theorique" && !identical(m, "theorique")
+
+    # Profil : raison d'indisponibilité en infobulle
+    info_prof <- if (prof_ok) paste0("Profil du ", tp$date_label, " — bas du métalimnion (",
+                                     tp$details$z_thermo_top, "\u2013", tp$details$z_thermo_bot, " m)")
+                 else if (is.null(tp)) "Aucun profil"
+                 else maj1(sub("^IFA( \\([^)]*\\))? ?: ?", "", tp$source))
+    p_prof <- pastille("therm", "ifa",
+                       if (prof_ok) paste0("Profil ", fmt_nb(tp$value, 1)) else "Profil",
+                       actif = actif == "ifa", dispo = prof_ok, info = info_prof)
+    p_med <- pastille("therm", "mediane",
+                      if (med_ok) paste0("Médiane ", fmt_nb(md$value, 1), " (", md$n, ")") else "Médiane",
+                      actif = actif == "mediane", dispo = med_ok,
+                      info = if (med_ok)
+                        paste0("Médiane du bas du métalimnion des profils d'août-septembre : ",
+                               paste0(sub(" \u2014.*$", "", md$dates), " : ", md$valeurs, " m",
+                                      collapse = " ; "))
+                      else if (md$n == 1) "Un seul profil valide en août-septembre (2 requis)"
+                      else "Aucun profil valide en août-septembre")
+    # Lester : sans T° de l'air, la pastille mène au champ de T° (plus bas)
+    p_theo <- if (!is.na(theo))
+      pastille("therm", "theorique", paste0("Lester ", fmt_nb(theo, 1), if (repli) " (repli)"),
+               actif = actif == "theorique",
+               info = "Formule de Lester (éq. 33, Shuter et coll. 1983)")
+    else
+      pastille("therm", "theorique", "Lester : T\u00b0 air requise \u2193", dispo = FALSE,
+               info = paste0("La formule demande la T\u00b0 moyenne de l'air (section Données climatiques) : ",
+                             "saisir les coordonnées du lac pour l'extraire des rasters Info-Climat, ",
+                             "ou saisir la température."),
+               js = "allerAuChamp('T_air');")
+
+    # Alertes : écart > 25 % avec la formule, profil hors saison
+    v_act <- switch(actif, ifa = tp$value, mediane = md$value, manual = v_man, NA_real_)
+    ecart <- if (!is.na(theo) && theo > 0 && !is.na(v_act)) (v_act - theo) / theo else NA_real_
+    al_ecart <- if (!is.na(ecart) && abs(ecart) > 0.25)
+      paste0("Écart de ", fmt_nb(100 * ecart, 0), " % avec la formule de Lester (",
+             fmt_nb(theo, 1), " m) : vérifier les profils, privilégier la fin de l'été.")
+    al_saison <- if (actif == "ifa") alerte_hors_saison()
+
+    rangee_pastilles(texte = if (actif == "manual") "Saisie \u00b7" else NULL,
+                     p_prof, p_med, p_theo, alerte = c(al_ecart, al_saison))
   })
 
   # --- O2 (Omble) -----------------------------------------------------------
@@ -4010,7 +4459,18 @@ server <- function(input, output, session) {
       else ligne_src("Saisie manuelle", list(lien_profil))
     } else if (!is.na(o2$value)) {
       date_lbl <- sub("^IFA \\(([^)]*)\\).*$", "\\1", o2$source)
-      ligne_src(paste0("Profil du ", date_lbl))
+      # B13 : lectures d'O2 invraisemblables (> SEUIL_O2_MAX mg/L), sans doute
+      # des % de saturation saisis dans la colonne des mg/L
+      alerte_o2 <- {
+        ifa <- tryCatch(ifa_habitat_raw(), error = function(e) NULL)
+        k   <- if (!is.null(ifa)) inv_effectif(ifa) else NA_character_
+        dov <- if (!is.na(k) && !is.null(ifa$profils[[k]])) ifa$profils[[k]]$do else numeric(0)
+        if (any(!is.na(dov) & dov > SEUIL_O2_MAX))
+          paste0("Oxygène > ", SEUIL_O2_MAX, " mg/L dans ce profil — probablement des % de ",
+                 "saturation : vérifier les données.") else NULL
+      }
+      ligne_src(paste0("Profil du ", date_lbl),
+                alerte = paste(c(alerte_o2, alerte_hors_saison()), collapse = " "))
     } else {
       ligne_src("Aucun profil d'oxygène exploitable — réduction O\u2082 non appliquée")
     }
@@ -4020,7 +4480,7 @@ server <- function(input, output, session) {
   # extraire_climat() renvoie un motif technique préfixé de l'année
   # (« 2024 : cellule sans valeur (NoData)… »). On le traduit en consigne
   # courte, orientée vers l'action. Cas fréquents dans les fichiers réels :
-  #   - coordonnées absentes de l'onglet Lacs (ex. R08 : 988 lacs sur 2 969) ;
+  #   - coordonnées absentes de l'onglet Lacs (ex. R08 : 143 lacs sur 2 969 après le repli entre UE — vérifié 2026-09-29) ;
   #   - point hors de la grille Info-Climat, qui ne couvre que le Québec (ex.
   #     lac Abitibi, dont le point de référence, à -79,71°, est à l'ouest de
   #     la frontière Québec–Ontario, vers -79,52°).
@@ -4130,23 +4590,40 @@ server <- function(input, output, session) {
       cols_txt <- intersect(c("territoire", "nom_plan_eau"), names(df))
       cols_cat <- intersect(c("type_peche", "type_recolte"), names(df))
 
+      # Code espèce nettoyé (B15, 2026-09-29) : « sana » ou « SANA  » doivent
+      # être reconnus comme SANA, comme dans l'onglet Specimens.
+      df$espece_code <- toupper(trimws(as.character(df$espece_code)))
+
       # Agrégation par nolac × annee × espece_code (fusionne été + hiver, etc.)
+      #
+      # Masses manquantes (B1, 2026-09-29) : avant, sum(masse, na.rm = TRUE)
+      # valait 0 quand toutes les masses d'une année étaient « - » alors que des
+      # poissons avaient été pesés — l'année devenait une récolte de 0 kg
+      # (ex. Caugnawana 2006 et 2009), ce qui abaissait les moyennes et l'export.
+      # Maintenant : masse NA si aucune masse n'est connue, et la masse moyenne
+      # d'un poisson ne se calcule que sur les pesés dont la masse est connue
+      # (nb_peses_masse). ORDRE IMPORTANT : nb_peses_masse est calculé AVANT
+      # les sommes qui remplacent nb_peses et masse_mesuree_kg (dans summarise(),
+      # une colonne redéfinie masque la colonne d'origine pour la suite).
       df_agg <- df %>%
         group_by(nolac, annee, espece_code) %>%
         summarise(
           across(all_of(cols_txt), ~ dplyr::first(na.omit(.x))),
           across(all_of(cols_cat), ~ paste(unique(na.omit(.x)), collapse = " / ")),
+          nb_peses_masse   = sum(nb_peses[!is.na(masse_mesuree_kg)], na.rm = TRUE),
           nb_captures      = sum(nb_captures,      na.rm = TRUE),
           nb_peses         = sum(nb_peses,          na.rm = TRUE),
-          masse_mesuree_kg = sum(masse_mesuree_kg,  na.rm = TRUE),
+          masse_mesuree_kg = if (all(is.na(masse_mesuree_kg))) NA_real_
+                             else sum(masse_mesuree_kg, na.rm = TRUE),
           effort_jp        = sum(effort_jp,          na.rm = TRUE),
           .groups = "drop"
         ) %>%
         mutate(
-          # Masse moyenne estimée sur l'échantillon pesé, extrapolée à la capture totale
+          # Masse moyenne estimée sur l'échantillon pesé (masse connue),
+          # extrapolée à la capture totale
           masse_totale_kg = dplyr::if_else(
-            nb_peses > 0,
-            (masse_mesuree_kg / nb_peses) * nb_captures,
+            nb_peses_masse > 0 & !is.na(masse_mesuree_kg),
+            (masse_mesuree_kg / nb_peses_masse) * nb_captures,
             NA_real_
           )
         )
@@ -4297,12 +4774,26 @@ server <- function(input, output, session) {
       Dmax    = !is.na(input$prof_max) && input$prof_max > 0,
       Dmn     = !is.na(input$prof_moy) && input$prof_moy > 0 &&
                 !is.na(input$prof_max) && input$prof_moy < input$prof_max,
+      # B8 : profondeur moyenne seule (Vézina, Valin-Vaillancourt) — la prof.
+      # max n'est exigée que pour rejeter une prof. moyenne incohérente
+      Dmn_seule = !is.na(input$prof_moy) && input$prof_moy > 0 &&
+                  (is.na(input$prof_max) || input$prof_moy < input$prof_max),
       T_air   = !is.na(t_air_effectif()),
       TDS     = !is.na(input$conductivite) && input$conductivite > 0,
       z_sec   = !is.na(input$secchi) && input$secchi > 0,
       G       = !is.na(g_effectif()) && g_effectif() > 0,
       Linf    = TRUE,
       Dth_obs = TRUE,
+      # Lester 2002 (Doré, décision 2026-09-29) : la T° de l'air n'est requise
+      # que faute de thermocline utilisable (profil ou saisie), car elle ne
+      # sert qu'au repli théorique de Shuter et coll. (1983). Sans l'une ni
+      # l'autre, le modèle est indisponible plutôt que de supposer le lac non
+      # stratifié (hypothèse non mesurée, qui compterait tout le volume comme
+      # habitat thermique).
+      T_air_repli = !is.na(t_air_effectif()) || {
+        dth <- dth_modele()
+        !is.na(dth) && dth > 0 && (is.na(input$prof_max) || dth < input$prof_max)
+      },
       TRUE    # intrant non répertorié : ne bloque pas un modèle par défaut
     )
   }
@@ -4311,11 +4802,13 @@ server <- function(input, output, session) {
     switch(nom,
       A       = "Superficie manquante",
       Dmax    = "Profondeur maximale manquante",
-      Dmn     = "Prof. moyenne \u2265 prof. max (ou manquante) \u2014 rejet\u00e9",
+      Dmn     = "Prof. moyenne manquante, ou prof. max absente ou inf\u00e9rieure \u00e0 la prof. moyenne",
+      Dmn_seule = "Prof. moyenne manquante (ou \u2265 prof. max)",
       T_air   = "Temp\u00e9rature de l'air moyenne manquante",
       TDS     = "Conductivit\u00e9 manquante (SDT requis)",
       z_sec   = "Profondeur de Secchi manquante",
       G       = "Degr\u00e9s-jours (G) manquants",
+      T_air_repli = "Thermocline ou T\u00b0 de l'air requise (aucune thermocline observ\u00e9e)",
       paste0(nom, " manquant")
     )
   }
@@ -4451,8 +4944,13 @@ server <- function(input, output, session) {
       lg <- inv_ligne_courante()
       # Conversion affichée : c'est le SDT qui entre dans les modèles
       sdt <- paste0("\u2248 ", fmt_nb(conductivite_vers_tds(input$conductivite), 1), " mg/L (SDT)")
-      return(ligne_param(input$conductivite, lg$cond, lg$cond_source, lg$cond_date, 1,
-                         suffixe = sdt))
+      # B13 : conductivité hors de la plage plausible (unités ou saisie à vérifier)
+      hors_plage <- input$conductivite < SEUIL_COND[1] || input$conductivite > SEUIL_COND[2]
+      return(tagList(
+        ligne_param(input$conductivite, lg$cond, lg$cond_source, lg$cond_date, 1, suffixe = sdt),
+        if (hors_plage)
+          msg_ui("warning", paste0("Valeur inhabituelle (plage attendue ", SEUIL_COND[1], " à ",
+                                   SEUIL_COND[2], " µS/cm) — vérifier l'unité et la saisie."))))
     }
     noms_tds <- vapply(config()$modeles, function(m)
       if ("TDS" %in% m$intrants) m$nom else NA_character_, character(1))
@@ -4484,8 +4982,17 @@ server <- function(input, output, session) {
       msg_ui("info", "Inconnu — réduction de 25 % (Valin-Vaillancourt 1998) et code « sans tributaire » (Vaillancourt-Boivin 2000) non appliqués.")
   })
 
+  # B5 : devient TRUE après une tentative de calcul Omble sans espèce cochée
+  especes_requises_rv <- reactiveVal(FALSE)
+
   output$msg_especes_omble <- renderUI({
-    grp <- especes_groupes_omble(input$especes_presentes_omble)
+    sel <- input$especes_presentes_omble
+    if (length(sel) == 0)
+      return(if (isTRUE(especes_requises_rv()))
+        msg_ui("danger", "Cocher les espèces présentes, ou « Lac en allopatrie » si l'omble est seul — requis pour calculer.")
+      else if (afficher_msgs())
+        msg_ui("info", "Cocher les espèces présentes, ou « Lac en allopatrie » si l'omble est seul."))
+    grp <- especes_groupes_omble(sel)
     non_couv <- setdiff(grp$brutes, c(ESPECES_COUVERTES_ARCHAMBAULT, "allopatrie"))
     if (length(non_couv) > 0)
       msg_ui("info", paste0("Espèce(s) non couverte(s) par Archambault (",
@@ -4542,6 +5049,18 @@ server <- function(input, output, session) {
       return()
     }
     nom_requis_rv(FALSE)
+    # Omble : espèces présentes obligatoires (B5, décision 2026-09-29). Une
+    # liste vide était traitée comme « Lac en allopatrie », soit le rendement
+    # le plus élevé : un oubli passait inaperçu. Le calcul est bloqué et le
+    # message est répété sous la liste (output$msg_especes_omble).
+    if (identical(espece_active_rv(), "omble") &&
+        length(input$especes_presentes_omble) == 0) {
+      especes_requises_rv(TRUE)
+      showNotification("Omble : cocher les espèces présentes, ou « Lac en allopatrie ».",
+                       type = "warning", duration = 5)
+      return()
+    }
+    especes_requises_rv(FALSE)
     av    <- model_availability()
     dispo <- any(vapply(config()$cascade_reference,
                         function(k) isTRUE(av[[k]]$ok), logical(1)))
@@ -4558,7 +5077,7 @@ server <- function(input, output, session) {
          input$climat_fenetre, input$lat_manuelle, input$lon_manuelle,
          input$conductivite, input$secchi, input$linf_manual, mode_src$linf(),
          mode_src$therm(), input$therm_manual, input$ifa_inv_choisi,
-         input$especes_presentes_omble, input$ph_eau, input$perimetre,
+         input$especes_presentes_omble, input$ph_eau,
          mode_src$o2(), input$o2_metres_sous_5ppm,
          input$tributaire_emissaire_omble, input$nb_chalets_omble),
     { if (isTRUE(calc_valide_rv())) calc_valide_rv(FALSE) },
@@ -4585,7 +5104,10 @@ server <- function(input, output, session) {
 
   results <- eventReactive(input$btn_calc, {
     validate(need(isTruthy(trimws(input$nom_lac %||% "")), "Nom du lac requis."))
-    warnings_actifs_rv(TRUE)
+    # B5 : même garde que dans observeEvent(input$btn_calc) — Omble sans espèce cochée
+    validate(need(!(identical(espece_active_rv(), "omble") &&
+                    length(input$especes_presentes_omble) == 0),
+                  "Omble : cocher les espèces présentes, ou « Lac en allopatrie »."))
     avail <- model_availability()
     validate(need(any(vapply(avail, function(a) isTRUE(a$ok), logical(1))),
                   "Aucun modèle ne peut tourner — vérifiez les paramètres du lac."))
@@ -4610,8 +5132,12 @@ server <- function(input, output, session) {
     # Bassin commun — le registre pioche ce dont chaque modèle a besoin
     bassin <- list(
       A       = sup, Dmax = prof_max, Dmn = prof_moy, T_air = t_air_effectif(),
+      # Versions non bloquantes des mêmes valeurs (voir intrant_valide() : un
+      # nom inconnu n'y bloque jamais un modèle) — B2, B4, 2026-09-29
+      T_air_repli = t_air_effectif(),
+      TDS_optionnel   = conductivite_vers_tds(nz(input$conductivite)),
       Linf    = resolve_linf(linf_resolved()$value, sup)$value,
-      Dth_obs = therm_resolved()$value,
+      Dth_obs = dth_modele(),
       TDS     = conductivite_vers_tds(input$conductivite),
       z_sec   = nz(input$secchi),
       # G du modèle Lester = degrés-jours (base 5 °C) / 1000 — le champ
@@ -4638,7 +5164,9 @@ server <- function(input, output, session) {
       # une profondeur moyenne inconnue y est une situation prevue (codes
       # 5/17), elles ne doivent donc PAS etre bloquantes comme "Dmn".
       Dmn_optionnel      = prof_moy,
-      Dmax_optionnel     = prof_max
+      Dmax_optionnel     = prof_max,
+      # Profondeur moyenne sans exigence de prof. max (B8) — Vézina, Valin-V.
+      Dmn_seule          = prof_moy
     )
 
     # Dispatch générique : TOUS les modèles déclarés par l'espèce active sont
@@ -4659,13 +5187,15 @@ server <- function(input, output, session) {
     # Source et valeur de Linf utilisées (pour affichage dans le tableau)
     lf_info     <- resolve_linf(linf_resolved()$value, sup)
     linf_source <- lf_info$source
-    linf_value  <- round(lf_info$value, 1)
+    linf_value  <- round(lf_info$value_lt, 1)   # LT : unité de l'interface
+    linf_value_lf <- round(lf_info$value, 1)    # LF : valeur passée au modèle
 
     c(list(
       nom_lac     = if (nchar(trimws(input$nom_lac)) > 0) input$nom_lac else "Lac non nommé",
       sup         = sup,
       linf_source = linf_source,
       linf_value  = linf_value,
+      linf_value_lf = linf_value_lf,
       prof_max    = prof_max,
       prof_moy    = prof_moy,
       T_air       = t_air_effectif(),
@@ -4717,12 +5247,16 @@ server <- function(input, output, session) {
     if (nrow(invs) <= 1) return(NULL)   # un seul inventaire → pas besoin de sélecteur
 
     # Étiquettes : date + nb points + indicateur de validité du profil
+    # Profils hors saison estivale signalés dans la liste (B3)
+    hors_saison <- if ("mois" %in% names(invs))
+      !is.na(invs$mois) & !(invs$mois %in% MOIS_ESTIVAUX) else rep(FALSE, nrow(invs))
     choix <- setNames(
       invs$inv_key,
       paste0(invs$date_label,
              ifelse(invs$profil_valide,
                     paste0("  (", invs$n_pts, " pts \u2713)"),
-                    paste0("  (", invs$n_pts, " pt(s) — sans profil)")))
+                    paste0("  (", invs$n_pts, " pt(s) — sans profil)")),
+             ifelse(hors_saison, " — hors saison estivale", ""))
     )
     # Libellé explicite sur ce que pilote l'inventaire : la thermocline
     # (Touladi, Doré) ou le profil d'oxygène (Omble). Conductivité, Secchi et
@@ -4743,9 +5277,6 @@ server <- function(input, output, session) {
   # restait vide et masqué (interblocage). On force le rendu même masqué.
   outputOptions(output, "ifa_inv_ui", suspendWhenHidden = FALSE)
 
-  observeEvent(exploit_raw(), {
-    warnings_actifs_rv(TRUE)
-  }, ignoreInit = TRUE)
 
   # ---------------------------------------------------------------------------
   # IMPORT — « Effacer l'importation »
@@ -4897,6 +5428,13 @@ server <- function(input, output, session) {
                             ") indisponible \u2014 référence utilisée : ", qb$ref_m$nom))
       }
       else tags$small(class = "kpi-sub mt-1 d-block", "Calculer pour estimer le quota"),
+      if (qb$calc_fait && !is.null(qb$ref_m) && identical(qb$ref_m$cle, "lester") &&
+          !is.na(qb$max_ha) &&
+          (qb$max_ha < PLAGE_LESTER_2021[1] || qb$max_ha > PLAGE_LESTER_2021[2]))
+        tags$small(class = "kpi-sub d-block fw-bold", style = "color:#A86E08;",
+                   paste0("\u26a0 Rendement hors de la plage publiée par Lester et coll. (",
+                          fmt_nb(PLAGE_LESTER_2021[1]), "\u2013", fmt_nb(PLAGE_LESTER_2021[2]),
+                          " kg/ha) — vérifier Linf et T° de l'air.")),
       if (qb$calc_fait && !is.null(qb$ref_m) && identical(qb$ref_m$cle, "ime"))
         tags$small(class = "kpi-sub d-block fst-italic",
                    "IME : rendement communautaire partitionné — plus incertain que Lester.")
@@ -5010,6 +5548,11 @@ server <- function(input, output, session) {
       "No lac"                        = if (is.na(no)) NA_character_ else no,
       "Nom du lac"                    = trimws(input$nom_lac %||% ""),
       "Superficie (ha)"               = qb$sup,
+      # Traçabilité (B6, 2026-09-29) : de quel modèle et de quel taux vient le quota
+      "Modèle de référence"           = qb$ref_m$nom,
+      "Rendement max. (kg/ha)"        = round(qb$max_ha, 3),
+      "Quota recommandé (kg/an)"      = qb$q_reco,
+      "Taux révisé (%)"               = qb$pct,
       "Quota révisé (kg/an)"          = qb$q_rev,
       "Quota actuel (kg/an)"          = quota_actuel_val(),
       "Masse moyenne prélevée (kg/an)" = if (a_obs) round(moy(df_obs$masse_totale_kg)) else NA_real_,
@@ -5022,6 +5565,8 @@ server <- function(input, output, session) {
     tab <- quotas_enregistres_rv()
     if (nrow(tab) > 0) tab <- tab[tab$cle != ligne$cle, , drop = FALSE]
     quotas_enregistres_rv(rbind(tab, ligne))
+    # Quotas non exportés : active l'avertissement du navigateur à la fermeture
+    session$sendCustomMessage("quotas_non_exportes", 1L)
     showNotification(paste0("Quota enregistré : ", ligne[["Nom du lac"]], " (", config()$nom, ")."),
                      type = "message", duration = 3)
   })
@@ -5070,7 +5615,9 @@ server <- function(input, output, session) {
     switch(mode_src$linf(),
       manual    = list(txt = "saisie manuelle", theo = FALSE),
       theorique = list(txt = "formule de Lester (choisie)", theo = TRUE),
-      list(txt = paste0("spécimens, n = ", lr$n), theo = FALSE))
+      list(txt = paste0("spécimens, n = ", lr$n, " \u2265 300 mm",
+                        if (isTRUE(lr$n < LINF_N_FIABLE)) " — fragile" else ""),
+           theo = FALSE))
   }
 
   source_param <- function(lg, cle, champ) {
@@ -5097,6 +5644,19 @@ server <- function(input, output, session) {
       A    = el(paste0("Superficie ", fmt_int(r$sup), " ha")),
       Dmax = el(paste0("Prof. max ", fmt_nb(r$prof_max, 1), " m")),
       Dmn  = el(paste0("Prof. moy. ", fmt_nb(r$prof_moy, 1), " m")),
+      # Intrants facultatifs (B2, B4, B8) : affichés seulement s'ils sont connus
+      Dmn_seule     = el(paste0("Prof. moy. ", fmt_nb(r$prof_moy, 1), " m")),
+      Dmn_optionnel = if (!is.na(r$prof_moy)) el(paste0("Prof. moy. ", fmt_nb(r$prof_moy, 1), " m")) else NULL,
+      A_optionnel   = if (!is.na(r$sup)) el(paste0("Superficie ", fmt_int(r$sup), " ha")) else NULL,
+      TDS_optionnel = if (!is.na(r$tds)) el(paste0("SDT ", fmt_nb(r$tds, 1), " mg/L (conductivité ",
+                        fmt_nb(input$conductivite, 1), " µS/cm, ",
+                        source_param(lg, "cond", input$conductivite), ")")) else NULL,
+      T_air_repli = if (is.na(r$T_air)) NULL else {
+        tr <- tair_resolu()
+        src <- switch(tr$source, climat = paste0("Info-Climat, ", fmt_annees(tr$annees)),
+                      lacs = "onglet Lacs", "saisie manuelle")
+        el(paste0("T° air ", fmt_nb(r$T_air, 2), " °C (", src, ")"))
+      },
       T_air = if (is.na(r$T_air)) el("T° air absente (pas de repli théorique possible)", TRUE) else {
         tr <- tair_resolu()
         src <- switch(tr$source, climat = paste0("Info-Climat, ", fmt_annees(tr$annees)),
@@ -5105,15 +5665,21 @@ server <- function(input, output, session) {
       },
       Linf = {
         ll <- linf_libelle()
-        el(paste0("Linf ", fmt_int(r$linf_value), " mm (", ll$txt, ")"), ll$theo)
+        el(paste0("Linf ", fmt_int(r$linf_value), " mm LT, soit ", fmt_int(r$linf_value_lf),
+                  " mm LF au modèle (", ll$txt, ")"), ll$theo)
       },
       Dth_obs = {
         dsrc <- res$Dth_source %||% ""
         if (grepl("^observ", dsrc)) {
           tr  <- tryCatch(therm_resolved(), error = function(e) NULL)
           src <- if (identical(mode_src$therm(), "manual")) "saisie manuelle"
-                 else if (!is.null(tr$date_label)) paste0("profil ", tr$date_label) else "profil"
+                 else if (identical(mode_src$therm(), "mediane"))
+                   paste0("médiane de ", tr$details$n, " profils d'août-septembre, bas du métalimnion")
+                 else if (!is.null(tr$date_label))
+                   paste0("profil ", tr$date_label, ", bas du métalimnion") else "profil"
           el(paste0("Thermocline ", fmt_nb(res$Dth, 1), " m (", src, ")"))
+        } else if (grepl("^th", dsrc) && identical(mode_src$therm(), "theorique")) {
+          el(paste0("Thermocline ", fmt_nb(res$Dth, 1), " m (formule de Lester, éq. 33 — choisie)"))
         } else if (grepl("^th", dsrc)) {
           el(paste0("Thermocline ", fmt_nb(res$Dth, 1), " m (repli théorique, Shuter)"), TRUE)
         } else el("Lac traité comme non stratifié (aucune thermocline)", TRUE)
@@ -5201,12 +5767,12 @@ server <- function(input, output, session) {
   #       l'échelle et exagérait visuellement les écarts ;
   #     - aucune zone colorée (la borne de 90 % n'a pas de base
   #       méthodologique ; couleurs à rediscuter plus tard) ;
-  #     - modèle de référence toujours affiché ; les autres modèles et les
-  #       grilles régionales s'ajoutent en cochant « Comparer » dans le
-  #       tableau.
+  #     - modèles et grilles régionales affichés seulement s'ils sont cochés
+  #       (« Comparer » dans le tableau), y compris le modèle de référence
+  #       (révision 2026-09 v2).
   #   Repères, distingués sans couleur (style de trait + symbole) :
   #     Recommandé = trait plein épais | Révisé = trait plein fin + losange
-  #     Actuel = tirets | Observé = pointillés
+  #     Actuel = tirets | Récolte observée = triangle sous la ligne
   #   Au-dessus de la ligne : recommandé, révisé, modèles ; en dessous :
   #   actuel, observé. Étiquettes réparties en « couloirs » pour éviter les
   #   chevauchements.
@@ -5497,7 +6063,10 @@ server <- function(input, output, session) {
         "Modèle"                    = vapply(keys_mod, label_mod, character(1)),
         "Max. théorique (kg/ha)"    = rep("—", n_mod),
         "Quota recommandé (kg/an)" = rep("—", n_mod),
-        "Note"                      = vapply(keys_mod, function(k) note_avec_dispo(k, ""), character(1)),
+        # Avant qu'un lac soit identifié : pas de liste d'intrants manquants
+        # (2026-09-29) — elle couvrait tout le tableau dès l'ouverture
+        "Note"                      = if (!afficher_msgs()) rep("En attente des données du lac", n_mod)
+                                      else vapply(keys_mod, function(k) note_avec_dispo(k, ""), character(1)),
         check.names     = FALSE
       )
       return(DT::datatable(df_empty,
@@ -5537,7 +6106,7 @@ server <- function(input, output, session) {
     tt_ime    <- paste0("Indice morpho-édaphique (Ryder 1965). Estime le rendement total de la communauté à partir du ratio SDT / profondeur moyenne (MEI), puis attribue ",
                         if (!is.null(part_cfg) && !is.na(part_cfg)) paste0(round(part_cfg * 100), " % à l'espèce (", esp_nom, ")") else "une part à l'espèce",
                         " selon OMNR 1982. Intrants : SDT, profondeur moyenne.")
-    tt_reg    <- "Rendement régional fixe (kg/ha) issu de divers documentation au sein du ministère. Valeur de référence par région et type de communauté, indépendante des paramètres du lac. Liens pour les références disponible dans l'onglet 'Information'"
+    tt_reg    <- "Rendement régional fixe (kg/ha) issu de documents régionaux du ministère. Valeur de référence par région et type de communauté, indépendante des paramètres du lac. Références dans l'onglet « Information »."
     tt_lester_savi <- paste0(
       "Modèle bioénergétique de référence pour le Doré (Lester et coll. 2002). Estime l'habitat thermo-optique (TOHA) à partir de la morphométrie, du Secchi et de la thermocline, puis le rendement (MSY) via les solides dissous totaux (SDT) et les degrés-jours (G). ",
       "TOHA (P_TOHA) : indice d'habitat thermo-optique, sans unité (0 à 1). ",
@@ -5546,7 +6115,7 @@ server <- function(input, output, session) {
       "G : degrés-jours cumulés (base 5 °C), saisis en valeur brute et divisés par 1000 dans la formule du rendement. ",
       "Intrants : superficie, prof. max, prof. moyenne, SDT, Secchi, degrés-jours (G) ; thermocline observée ou repli théorique (T° air)."
     )
-    tt_valin  <- "Modèle empirique régional (Valin / Vaillancourt 1998, Saguenay–Lac-Saint-Jean). Indice morpho-édaphique (IME = SDT / prof. moyenne) puis part Doré (32 %). Intrants : SDT, profondeur moyenne ; repli à 0,60 kg/ha (lacs ≥ 20 ha) si donnée insuffisante."
+    tt_valin  <- "Modèle empirique régional (Valin / Vaillancourt 1998, Saguenay–Lac-Saint-Jean). Indice morpho-édaphique (IME = SDT / prof. moyenne) puis part Doré (32 %). Intrants : SDT, profondeur moyenne ; repli à 0,60 kg/ha (lacs ≥ 20 ha) si la conductivité et la profondeur moyenne manquent toutes deux."
     tt_touladi_valin <- "Modèle empirique régional (Valin 1998, Saguenay–Lac-Saint-Jean) — mêmes coefficients IME réajustés que le Valin du Doré (0,66 / 0,466), mais part Touladi (25 %) au lieu de 32 %. Intrants : SDT, profondeur moyenne. Aucun repli documenté si donnée insuffisante — modèle alors indisponible."
     tt_vezina <- "Régression puissance-exponentielle du rendement optimal en fonction de la profondeur moyenne seule (83 lacs, Vézina 1978). Base commune de Valin et Vaillancourt. Non valide sous ~2 m de profondeur moyenne. Intrants : profondeur moyenne."
     tt_archambault <- paste0(
@@ -5570,7 +6139,8 @@ server <- function(input, output, session) {
     note_lester <- if (!is.null(r$lester) && !is.na(r$lester$rendement_ha))
       paste0("B_rms = ", fmt_nb(r$lester$B_rms), " kg/ha",
              " | M = ", fmt_nb(r$lester$M, 3),
-             " | Linf (", r$linf_source, ") = ", fmt_int(r$linf_value), " mm",
+             " | Linf (", r$linf_source, ") = ", fmt_int(r$linf_value), " mm LT (",
+             fmt_int(r$linf_value_lf), " mm LF)",
              " | T° air = ", fmt_nb(r$T_air, 1), " °C")
     else ""
 
@@ -5683,7 +6253,13 @@ server <- function(input, output, session) {
       if (length(avert) != 1 || is.na(avert)) avert <- ""
       court <- switch(k,
         lester      = paste0("Linf : ", linf_libelle()$txt,
-                             " · thermocline ", res$Dth_source %||% "—"),
+                             " · thermocline ", res$Dth_source %||% "—",
+                             # B13 : hors de la plage des lacs du tableau 3 de Lester
+                             if (res$rendement_ha < PLAGE_LESTER_2021[1] ||
+                                 res$rendement_ha > PLAGE_LESTER_2021[2])
+                               paste0(" · \u26a0 hors de la plage publiée (",
+                                      fmt_nb(PLAGE_LESTER_2021[1]), "\u2013", fmt_nb(PLAGE_LESTER_2021[2]),
+                                      " kg/ha) : vérifier Linf et T° air") else ""),
         lester_savi = paste0("Thermocline ", res$Dth_source %||% "—"),
         ime         = "Rendement communautaire partitionné — peu prédictif dans les lacs à accès contrôlé du Québec (Loranger 1986)",
         vezina      = "Profondeur moyenne seule, sans ajustement pour les espèces",
@@ -5706,6 +6282,12 @@ server <- function(input, output, session) {
     note_mod <- vapply(keys_mod, function(k) {
       info <- avail[[k]]
       if (!is.null(info) && !isTRUE(info$ok)) return(paste0("Indisponible — ", info$note))
+      # Modèle calculé mais sans valeur (combinaison d'espèces non couverte,
+      # hors domaine, repli non applicable...) : afficher son motif en clair
+      # plutôt qu'une note vide (2026-09-29)
+      res_k <- r[[k]]
+      if (!is.null(res_k) && is.na(res_k$rendement_ha) && nzchar(res_k$note %||% ""))
+        return(paste0("Indisponible — ", res_k$note))
       note_cellule(note_modele(k), note_lib[[k]])
     }, character(1))
 
@@ -5793,15 +6375,23 @@ server <- function(input, output, session) {
                    drop = FALSE]
       }
       notes <- data.frame(
-        Colonne = c("Quota révisé (kg/an)", "Masse moyenne prélevée (kg/an)", "Succès moy. (n/j-p)",
-                    "Période exploitation"),
+        Colonne = c("Modèle de référence", "Rendement max. (kg/ha)", "Quota recommandé (kg/an)",
+                    "Taux révisé (%)", "Quota révisé (kg/an)", "Masse moyenne prélevée (kg/an)",
+                    "Succès moy. (n/j-p)", "Période exploitation"),
         Définition = c(
+          "Modèle dont le rendement a servi au quota (le modèle recommandé, ou le suivant de la cascade s'il était indisponible).",
+          "Rendement maximal théorique du modèle de référence.",
+          paste0(PCT_RECOMMANDE, " % × rendement max. × superficie."),
+          "Taux choisi par le biologiste pour le quota révisé.",
           "Taux choisi par le biologiste × maximum théorique du modèle de référence × superficie.",
           "Moyenne annuelle de la masse récoltée estimée, sur les 5 dernières années disponibles du lac.",
           "Moyenne des succès annuels (captures / effort) sur les mêmes années — chaque année pèse autant.",
           "Années réellement couvertes : fenêtre de 5 ans se terminant à la dernière saison disponible ; les années sans donnée ne sont pas comblées."),
         check.names = FALSE, stringsAsFactors = FALSE)
       writexl::write_xlsx(list(Quotas = tab, Notes = notes), path = file)
+      # Export fait : plus d'avertissement à la fermeture (jusqu'au prochain
+      # enregistrement)
+      session$sendCustomMessage("quotas_non_exportes", 0L)
     }
   )
 
@@ -5823,7 +6413,9 @@ server <- function(input, output, session) {
       DT::DTOutput("exploit_table"),
       tags$small(class = "text-muted fst-italic d-block mt-2",
                  "« Affichage graphiques » coche rapidement les années à tracer. ",
-                 "Cocher / décocher une année trace ou retire ses points des graphiques.")
+                 "Cocher / décocher une année trace ou retire ses points des graphiques. ",
+                 paste0("Masse en orange italique : estimée à partir de moins de ",
+                        SEUIL_N_PESES, " poissons pesés, à interpréter avec prudence."))
     )
   })
 
@@ -5925,7 +6517,12 @@ server <- function(input, output, session) {
       div(class = "tab2-section-head",
         div(class = "tab2-section-title",
             info_tip("Indicateurs : moyennes et tendances", contexte_tip)),
-        selecteur
+        # Années réellement couvertes par la fenêtre, visibles sans survol
+        div(class = "d-flex align-items-center gap-3",
+          tags$small(class = "text-muted",
+                     paste0(min(df$annee), "\u2013", max(df$annee), " (", n, " an",
+                            if (n > 1) "s", " de données)")),
+          selecteur)
       ),
       do.call(div, c(list(class = "kpi-strip-row"), cards))
     )
@@ -5970,7 +6567,7 @@ server <- function(input, output, session) {
       # Graphique 1 : rendement observé vs Lester (Lester seul, pas de sélecteur)
       div(class = "graph-card",
         div(class = "d-flex justify-content-between align-items-center mb-2",
-          tags$strong("Rendement observé vs maximum théorique (Lester 2021)"),
+          tags$strong("Rendement observé vs maximum théorique (modèle de référence)"),
           tags$button(
             class   = "btn btn-sm btn-link p-0 text-muted",
             style   = "text-decoration:none; font-size:12px;",
@@ -5979,7 +6576,8 @@ server <- function(input, output, session) {
           )
         ),
         div(id = "plot_rendement_panel",
-          plotly::plotlyOutput("plot_rendement", height = "300px")
+          plotly::plotlyOutput("plot_rendement", height = "300px"),
+          uiOutput("note_plot_rendement")
         )
       ),
       # Graphique 2 : effort et succès
@@ -6018,7 +6616,7 @@ server <- function(input, output, session) {
         div(class = "d-flex justify-content-between align-items-center mb-2",
           tags$strong("Données annuelles d'exploitation"),
           actionButton("btn_toggle_tab2_table", "▾ Masquer",
-                       class = "btn btn-sm btn-link p-0 text-muted",
+                       class = "btn btn-sm btn-link p-0 text-muted lien-masquer",
                        style = "text-decoration:none; font-size:12px;")
         ),
         uiOutput("tab2_table_container")
@@ -6043,8 +6641,12 @@ server <- function(input, output, session) {
       ifelse(df$annee %in% coches, "checked", ""),
       df$annee
     )
+    # Masse fragile (B11, 2026-09-29) : estimée à partir de moins de
+    # SEUIL_N_PESES poissons pesés. Signalée seulement, jamais exclue.
+    npm <- if ("nb_peses_masse" %in% names(df)) df$nb_peses_masse else df$nb_peses
+    df$peu_peses <- as.integer(!is.na(df$masse_totale_kg) & !is.na(npm) & npm < SEUIL_N_PESES)
     df %>% select(Graph, annee, nb_captures, effort_jp,
-                  masse_totale_kg, rendement_obs, succes)
+                  masse_totale_kg, rendement_obs, succes, peu_peses)
   }
 
   # Table DT éditable — col 0 = case « tracer » HTML, cols 1-4 éditables,
@@ -6059,10 +6661,10 @@ server <- function(input, output, session) {
       escape    = FALSE,
       filter    = "none",
       colnames  = c("Graph.", "Année", "Nb capturés", "Effort (j-p)",
-                    "Masse totale (kg)", "Rendement (kg/ha)", "Succès (n/j-p)"),
+                    "Masse totale (kg)", "Rendement (kg/ha)", "Succès (n/j-p)", "peu_peses"),
       rownames  = FALSE,
       editable  = list(target  = "cell",
-                       disable = list(columns = c(0, 5, 6))),
+                       disable = list(columns = c(0, 5, 6, 7))),
       options   = list(
         dom        = "t",
         scrollY    = "220px",
@@ -6070,7 +6672,8 @@ server <- function(input, output, session) {
         paging     = FALSE,
         columnDefs = list(
           list(className   = "dt-center", targets = "_all"),
-          list(width       = "38px",      targets = 0)
+          list(width       = "38px",      targets = 0),
+          list(visible     = FALSE,       targets = 7)   # indicateur B11, masqué
         ),
         initComplete = DT::JS(
           "function(settings, json) {",
@@ -6084,9 +6687,16 @@ server <- function(input, output, session) {
       ),
       selection = "none"
     ) %>%
-      DT::formatRound(columns = 5, digits = 2) %>%
-      DT::formatRound(columns = 6, digits = 3) %>%
-      DT::formatStyle(columns = 6, color = "#7F8C8D", fontStyle = "italic")
+      # Virgule décimale et espace pour les milliers (convention québécoise,
+      # comme le reste de l'interface — révision 2026-09-29)
+      DT::formatRound(columns = 5, digits = 2, mark = " ", dec.mark = ",") %>%
+      DT::formatRound(columns = 6, digits = 3, mark = " ", dec.mark = ",") %>%
+      DT::formatRound(columns = 7, digits = 2, mark = " ", dec.mark = ",") %>%
+      DT::formatStyle(columns = 6, color = "#7F8C8D", fontStyle = "italic") %>%
+      # Masse estimée sur moins de SEUIL_N_PESES poissons pesés : orange italique
+      DT::formatStyle(columns = 5, valueColumns = 8,
+                      color     = DT::styleEqual(1, "#A86E08"),
+                      fontStyle = DT::styleEqual(1, "italic"))
   })
 
   # Proxy : met à jour les cases à cocher sans reconstruire le tableau entier
@@ -6165,7 +6775,7 @@ server <- function(input, output, session) {
     etiquettes <- ifelse(!is.na(lacs$nomlac) & nzchar(lacs$nomlac),
                          paste0(lacs$nolac, " \u2014 ", lacs$nomlac), lacs$nolac)
     div(class = "champ",
-      selectInput("lac_select", "Nom du lac",
+      selectInput("lac_select", "Lac (no \u2014 nom)",
                   choices  = c("— Choisir —" = "", setNames(lacs$nolac, etiquettes)),
                   selected = isolate(lac_courant_rv()),
                   width    = "100%"))
@@ -6176,7 +6786,7 @@ server <- function(input, output, session) {
     lac_courant_rv("")
     updateTextInput(session, "no_lac",  value = "")
     updateTextInput(session, "nom_lac", value = "")
-    for (id in c("sup", "prof_max", "prof_moy", "perimetre", "conductivite", "secchi",
+    for (id in c("sup", "prof_max", "prof_moy", "conductivite", "secchi",
                  "ph_eau", "nb_chalets_omble", "lat_manuelle", "lon_manuelle",
                  "quota_actuel_touladi", "quota_actuel_dore", "quota_actuel_omble"))
       updateNumericInput(session, id, value = NA)
@@ -6345,12 +6955,19 @@ server <- function(input, output, session) {
         else "Choisir un lac pour afficher les données d'exploitation."))
     }
     df <- exploit_edited_rv()
+    # B13 : années où plus de poissons ont été pesés que capturés
+    an_incoh <- if (!is.null(df) && nrow(df) > 0)
+      df$annee[!is.na(df$nb_peses) & !is.na(df$nb_captures) & df$nb_peses > df$nb_captures]
+      else numeric(0)
     tagList(
       if (!is.null(df) && nrow(df) > 0) {
         an <- range(df$annee, na.rm = TRUE)
         div(class = "src-ligne", paste0(nrow(df), " année", if (nrow(df) > 1) "s" else "",
                                         " (", an[1], "\u2013", an[2], ")"))
       },
+      if (length(an_incoh) > 0)
+        msg_ui("warning", paste0("Plus de poissons pesés que capturés en ",
+                                 paste(sort(an_incoh), collapse = ", "), " — données à vérifier.")),
       if (identical(correspondance_lacs(), "different") && is.na(sup_exploit()))
         msg_ui("warning", paste0("Superficie du lac ", cle_lac_exploit(), " introuvable dans ",
                                  "l'onglet Lacs — rendement observé (kg/ha) non calculable."))
@@ -6360,20 +6977,18 @@ server <- function(input, output, session) {
   # Paramètres sauvegardés par lac — session uniquement
   params_sauvegardes_rv <- reactiveVal(list())
 
-  # Déclencheur pour les avertissements visuels (activé après import ou calcul)
-  warnings_actifs_rv <- reactiveVal(FALSE)
 
   output$save_params_ui <- renderUI({
     req(isTruthy(input$no_lac))
     div(class = "mt-1",
       actionButton("btn_save_params",
-                   label = "Sauvegarder ce lac (session en cours)",
+                   label = "Mémoriser les valeurs de ce lac (session en cours)",
                    class = "btn btn-sm btn-outline-primary w-100")
     )
   })
 
   # Champs simples conservés par la sauvegarde (session seulement)
-  CHAMPS_SAUVES_NUM <- c("sup", "prof_max", "prof_moy", "perimetre", "conductivite",
+  CHAMPS_SAUVES_NUM <- c("sup", "prof_max", "prof_moy", "conductivite",
                          "secchi", "ph_eau", "nb_chalets_omble", "lat_manuelle", "lon_manuelle",
                          "quota_actuel_touladi", "quota_actuel_dore", "quota_actuel_omble")
 
@@ -6429,25 +7044,27 @@ server <- function(input, output, session) {
   output$plot_rendement <- plotly::renderPlotly({
     req(exploit_data())
     df <- exploit_data()
+    # Couleurs de l'espèce active (2026-09-29) — avant : toujours le bleu Touladi
+    pal <- config()$palette
     r  <- tryCatch(results(), error = function(e) NULL)
 
     # Référence = modèle de référence de l'espèce (cascade du registre),
     # masquée tant que le calcul affiché est périmé.
-    ref_m_g <- if (isTRUE(calc_valide_rv()))
+    # B7 (2026-09-29) : pas de ligne de référence si le lac d'exploitation
+    # n'est pas celui du calcul — elle porterait sur un autre lac.
+    ref_m_g <- if (isTRUE(calc_valide_rv()) &&
+                   !identical(correspondance_lacs(), "different"))
                  modele_reference(r, config()$cascade_reference, config()$modeles) else NULL
     ref <- if (!is.null(ref_m_g))
              list(val = ref_m_g$val, nom = ref_m_g$nom)
            else NULL
-    # Modèles régionaux affichés sur le graphique = ceux cochés « Comparer »
-    # dans le tableau (input$overlay_models), valeur seul/mixte selon espèces.
-    # NB (2026-09) : la colonne « Comparer » a été retirée ; input$overlay_models
-    # reste NULL et ce graphique n'affiche plus que le modèle de référence.
-    pal_reg_p  <- c("#6A5ACD", "#2E8B57", "#A0522D", "#9370DB", "#3CB371", "#CD853F")
-    regs_act_p <- regions_actives()
-    reg_sel_p  <- intersect(input$overlay_models, vapply(regs_act_p, `[[`, character(1), "key"))
-    regs_p     <- Filter(function(x) x$key %in% reg_sel_p, regs_act_p)
-    reg_vals_p <- if (length(regs_p) > 0) vapply(regs_p, `[[`, numeric(1),   "val") else numeric(0)
-    reg_noms_p <- if (length(regs_p) > 0) vapply(regs_p, `[[`, character(1), "nom") else character(0)
+    # Grilles régionales : non tracées sur ce graphique. L'ancien sélecteur
+    # (input$overlay_models) n'existe plus — nettoyage 2026-09-29 ; les
+    # variables restent vides pour ne pas toucher au reste du tracé.
+    regs_p     <- list()
+    reg_vals_p <- numeric(0)
+    reg_noms_p <- character(0)
+    pal_reg_p  <- character(0)
 
     vals_y  <- c(df$rendement_obs,
                  if (!is.null(ref)) ref$val else NULL,
@@ -6457,10 +7074,10 @@ server <- function(input, output, session) {
 
     p <- suppressWarnings(
       ggplot(df, aes(x = annee, y = rendement_obs)) +
-      geom_line(color = COL$accent, linewidth = 0.9) +
+      geom_line(color = pal$accent, linewidth = 0.9) +
       geom_point(aes(text = paste0("Année : ", annee, "<br>",
                                    "Rendement obs. : ", round(rendement_obs, 2), " kg/ha")),
-                 color = COL$primaire, size = 2.8) +
+                 color = pal$primaire, size = 2.8) +
       labs(x = NULL, y = "Rendement (kg/ha)") +
       scale_x_continuous(breaks = scales::pretty_breaks()) +
       theme_minimal(base_size = 13) +
@@ -6482,7 +7099,7 @@ server <- function(input, output, session) {
         val_ref    <- ref$val
         lbl_ref    <- paste0(ref$nom, " — max. (", round(val_ref, 1), " kg/ha)")
         df_ref_line <- data.frame(x = c(x_min, x_max), y = val_ref, serie = lbl_ref)
-        color_vals[lbl_ref] <- COL$primaire
+        color_vals[lbl_ref] <- pal$primaire
         p <- p +
           geom_line(data = df_ref_line,
                     aes(x = x, y = y, color = serie),
@@ -6544,16 +7161,27 @@ server <- function(input, output, session) {
     gp
   })
 
+  # Mention sous le graphique 1 : pourquoi la ligne du maximum est absente (B7)
+  output$note_plot_rendement <- renderUI({
+    msg <- if (identical(correspondance_lacs(), "different"))
+      "Maximum théorique non affiché : le lac d'exploitation n'est pas celui du calcul."
+    else if (!isTRUE(calc_valide_rv()))
+      "Lancer le calcul (onglet Rendement théorique) pour afficher le maximum théorique."
+    if (!is.null(msg)) tags$small(class = "text-muted fst-italic d-block mt-1", msg)
+  })
+
   # --- Graphique 2 : Pression (barres) + Succès (ligne) — plotly natif -------
   output$plot_pression <- plotly::renderPlotly({
     req(exploit_data())
     df <- exploit_data()
+    # Couleurs de l'espèce active (2026-09-29) — avant : toujours le bleu Touladi
+    pal <- config()$palette
 
     plotly::plot_ly(df, x = ~annee) %>%
       plotly::add_bars(
         y         = ~pression,
         name      = "Pression de pêche (j-p/ha)",
-        marker    = list(color = COL$accent, opacity = 0.8),
+        marker    = list(color = pal$accent, opacity = 0.8),
         hovertemplate = "Année : %{x}<br>Pression : %{y:.2f} j-p/ha<extra></extra>"
       ) %>%
       plotly::add_trace(
@@ -6562,32 +7190,34 @@ server <- function(input, output, session) {
         yaxis     = "y2",
         type      = "scatter",
         mode      = "lines+markers",
-        line      = list(color = "#E74C3C", width = 2.5),
-        marker    = list(color = "#E74C3C", size = 8),
+        line      = list(color = pal$serie2, width = 2.5),
+        marker    = list(color = pal$serie2, size = 8),
         hovertemplate = "Année : %{x}<br>Succès : %{y:.2f} poissons/j-p<extra></extra>"
       ) %>%
       plotly::layout(
-        xaxis  = list(title = "", tickformat = "d", dtick = 1, ticks = "outside"),
+        # Pas automatique (2026-09-29) : dtick = 1 étiquetait chaque année,
+        # illisible au-delà d'une quinzaine d'années
+        xaxis  = list(title = "", tickformat = "d", ticks = "outside"),
         yaxis  = list(title     = "Pression de pêche (j-p/ha)",
-                      titlefont = list(color = COL$accent),
-                      tickfont  = list(color = COL$accent),
-                      tickcolor = COL$accent,
-                      linecolor = COL$accent,
+                      titlefont = list(color = pal$accent),
+                      tickfont  = list(color = pal$accent),
+                      tickcolor = pal$accent,
+                      linecolor = pal$accent,
                       zeroline  = FALSE,
                       range     = c(0, max(df$pression, na.rm = TRUE) * 1.30)),
         yaxis2 = list(title          = "Succès (poissons/j-p)",
-                      titlefont      = list(color = "#E74C3C"),
+                      titlefont      = list(color = pal$serie2),
                       overlaying     = "y", side = "right",
                       anchor         = "x",
-                      color          = "#E74C3C",
+                      color          = pal$serie2,
                       showgrid       = FALSE,
                       zeroline       = FALSE,
                       showline       = TRUE,
-                      linecolor      = "#E74C3C",
+                      linecolor      = pal$serie2,
                       linewidth      = 2,
                       showticklabels = TRUE,
-                      tickfont       = list(color = "#E74C3C", size = 12),
-                      tickcolor      = "#E74C3C",
+                      tickfont       = list(color = pal$serie2, size = 12),
+                      tickcolor      = pal$serie2,
                       tickmode       = "auto",
                       rangemode      = "tozero",
                       range          = c(0, max(df$succes, na.rm = TRUE) * 1.30)),
@@ -6601,31 +7231,39 @@ server <- function(input, output, session) {
       )
   })
 
-  # --- Graphique 3 : Masse moyenne + repère 3 dernières années ---------------
+  # --- Graphique 3 : Masse moyenne + moyenne sur la fenêtre choisie ----------
   output$plot_masse <- plotly::renderPlotly({
     req(exploit_data())
     df <- exploit_data()
+    # Couleurs de l'espèce active (2026-09-29) — avant : toujours le bleu Touladi
+    pal <- config()$palette
 
-    dernieres <- tail(sort(unique(df$annee)), 3)
-    moy_3ans  <- mean(df$masse_moy_g[df$annee %in% dernieres], na.rm = TRUE)
-    label_moy <- paste0("Moy. ", length(dernieres), " dern. années : ",
-                        round(moy_3ans), " g")
+    # Moyenne sur la fenêtre choisie (5, 10 ou 20 dernières années — B9,
+    # 2026-09-29), même règle que les indicateurs : années >= dernière - n + 1.
+    # Avant : 3 dernières années fixes, différentes des indicateurs affichés.
+    # « Toutes » (fenêtre "all") : toutes les années du lac.
+    tout_fen  <- identical(fenetre_rv(), "all")
+    n_fen     <- suppressWarnings(as.integer(fenetre_rv()))
+    if (!tout_fen && (is.na(n_fen) || n_fen <= 0)) n_fen <- 5L
+    an_max    <- max(df$annee, na.rm = TRUE)
+    dans_fen  <- !is.na(df$annee) & !is.na(df$masse_moy_g) &
+                 (tout_fen | df$annee >= an_max - n_fen + 1L)
+    moy_3ans  <- if (any(dans_fen)) mean(df$masse_moy_g[dans_fen]) else NA_real_
+    an_fen    <- df$annee[dans_fen]
+    txt_fen   <- if (tout_fen) "toutes les années" else paste0(n_fen, " dern. années")
+    label_moy <- if (is.na(moy_3ans)) paste0("Aucune masse (", txt_fen, ")")
+                 else paste0("Moy. ", txt_fen, " (", min(an_fen), "–", max(an_fen),
+                             ") : ", round(moy_3ans), " g")
 
     y_nudge_m <- diff(range(df$masse_moy_g, na.rm = TRUE)) * 0.06
     if (!is.finite(y_nudge_m) || y_nudge_m == 0) y_nudge_m <- 5
 
     p <- suppressWarnings(
       ggplot(df, aes(x = annee, y = masse_moy_g)) +
-      geom_line(color = COL$accent, linewidth = 0.9) +
+      geom_line(color = pal$accent, linewidth = 0.9) +
       geom_point(aes(text = paste0("Année : ", annee, "<br>",
                                    "Masse moy. : ", round(masse_moy_g, 0), " g")),
-                 color = COL$primaire, size = 2.8) +
-      geom_line(data = data.frame(x     = c(min(df$annee) - 0.3, max(df$annee) + 0.3),
-                                  y     = moy_3ans,
-                                  serie = label_moy),
-                aes(x = x, y = y, color = serie),
-                linetype = "dashed", linewidth = 0.7, inherit.aes = FALSE) +
-      scale_color_manual(name = NULL, values = setNames("#E67E22", label_moy)) +
+                 color = pal$primaire, size = 2.8) +
       scale_x_continuous(breaks = scales::pretty_breaks()) +
       labs(x = NULL, y = "Masse moy. (g)") +
       theme_minimal(base_size = 13) +
@@ -6634,6 +7272,16 @@ server <- function(input, output, session) {
             legend.position  = "bottom",
             legend.text      = element_text(size = 9))
     )  # fin suppressWarnings
+
+    # Ligne de la moyenne, seulement si la fenêtre contient au moins une masse
+    if (!is.na(moy_3ans))
+      p <- p +
+        geom_line(data = data.frame(x     = c(min(df$annee) - 0.3, max(df$annee) + 0.3),
+                                    y     = moy_3ans,
+                                    serie = label_moy),
+                  aes(x = x, y = y, color = serie),
+                  linetype = "dashed", linewidth = 0.7, inherit.aes = FALSE) +
+        scale_color_manual(name = NULL, values = setNames("#E67E22", label_moy))
 
     all_m <- c(df$masse_moy_g, moy_3ans)
     m_lo  <- min(all_m, na.rm = TRUE) * 0.80

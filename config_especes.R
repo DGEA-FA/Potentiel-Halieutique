@@ -6,6 +6,19 @@
 # calc_valin_vaillancourt_omble, ...).
 #
 #   source("config_especes.R", encoding = "UTF-8")
+#
+# Révision 2026-09-29 : noms des modèles harmonisés avec ceux du tableau
+# « Détail par modèle » (lib_mod dans app.R) — la carte du quota, la figure et
+# la page Information affichaient « Lester 2021 », « Shuter 1998 » et
+# « IME / Ryder » alors que le tableau affichait « Lester et coll. 2021 »,
+# « Shuter et coll. 1998 » et « IME (Ryder 1965 + OMNR 1982) ». Aucun calcul
+# modifié.
+#
+# Révision 2026-09-29 (b) : intrants rendus non bloquants là où la formule ne
+# les exige pas — T° air du Doré requise seulement sans
+# thermocline observée (T_air_repli, B2), repli Valin du Doré
+# (TDS/Dmn/A/Dmax « _optionnel », B4), prof. moyenne sans prof. max pour
+# Vézina et Valin-Vaillancourt (Dmn_seule, B8). Voir intrant_valide() dans app.R.
 # =============================================================================
 
 
@@ -34,12 +47,12 @@ REGISTRE_ESPECES <- list(
     palette  = COULEURS$touladi,
     modeles  = list(
       lester = list(
-        nom      = "Lester 2021",
+        nom      = "Lester et coll. 2021",
         fn       = calc_lester_touladi,
         intrants = c("A", "Dmax", "Dmn", "T_air", "Linf", "Dth_obs")
       ),
       shuter = list(
-        nom      = "Shuter 1998",
+        nom      = "Shuter et coll. 1998",
         fn       = calc_shuter_1998,
         intrants = c("A", "TDS")
       ),
@@ -49,7 +62,7 @@ REGISTRE_ESPECES <- list(
         intrants = c("TDS", "Dmn")
       ),
       ime = list(
-        nom       = "IME / Ryder",
+        nom       = "IME (Ryder 1965 + OMNR 1982)",
         fn        = calc_ime_ryder,
         intrants  = c("TDS", "Dmn"),
         partition = 0.25            # part Touladi — OMNR 1982 (~25 %)
@@ -75,15 +88,16 @@ REGISTRE_ESPECES <- list(
       lester_savi = list(
         nom      = "Lester et coll. 2002",
         fn       = calc_lester_dore,
-        intrants = c("A", "Dmax", "Dmn", "TDS", "G", "z_sec", "Dth_obs", "T_air")
+        intrants = c("A", "Dmax", "Dmn", "TDS", "G", "z_sec", "Dth_obs", "T_air_repli")
       ),
       valin = list(
         nom      = "Valin / Vaillancourt 1998",
         fn       = calc_valin_dore,
-        intrants = c("TDS", "Dmn", "A")
+        # Intrants facultatifs : le repli de 0,60 kg/ha doit rester possible
+        intrants = c("TDS_optionnel", "Dmn_optionnel", "A_optionnel", "Dmax_optionnel")
       ),
       ime = list(
-        nom       = "IME / Ryder",
+        nom       = "IME (Ryder 1965 + OMNR 1982)",
         fn        = calc_ime_ryder,
         intrants  = c("TDS", "Dmn"),
         partition = 0.32        # part Doré — OMNR 1982
@@ -120,6 +134,10 @@ REGISTRE_ESPECES <- list(
   #   IME retiré (2026-07) : aucune formule IME pour l'Omble n'est sourcée
   #   dans la littérature consultée (Vézina/Archambault/Valin/Vaillancourt) —
   #   la partition 0,25 précédente n'était pas justifiée.
+  #   NOTE (relecture 2026-09-29) : le résumé d'OMNR (1982, p. 1) propose
+  #   pourtant 25 % pour l'omble de fontaine en pêche sportive (« Brook trout
+  #   (N/A, 25) »). Le retrait reste un choix défendable (Loranger 1986), mais
+  #   la justification ci-dessus est à corriger.
   # ---------------------------------------------------------------------------
   omble = list(
     nom      = "Omble de fontaine",
@@ -129,7 +147,7 @@ REGISTRE_ESPECES <- list(
       vezina = list(
         nom      = "Vézina 1978",
         fn       = calc_vezina_omble,
-        intrants = c("Dmn")
+        intrants = c("Dmn_seule")
       ),
       archambault = list(
         nom      = "Archambault 1988/2009",
@@ -139,7 +157,7 @@ REGISTRE_ESPECES <- list(
       omble_valin = list(
         nom      = "Valin et Vaillancourt 1998",
         fn       = calc_valin_vaillancourt_omble,
-        intrants = c("Dmn", "grp", "pH", "o2_pct_reduction",
+        intrants = c("Dmn_seule", "grp", "pH", "o2_pct_reduction",
                      "tributaire_absent", "nb_chalets", "A_optionnel")
       ),
       omble_boivin = list(
